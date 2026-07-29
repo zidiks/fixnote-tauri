@@ -8,8 +8,9 @@ const previewCache = new Map<
 
 export async function loadLinkPreview(
   url: string,
+  options: { refresh?: boolean } = {},
 ): Promise<LinkPreviewMetadata> {
-  const cached = previewCache.get(url);
+  const cached = options.refresh ? undefined : previewCache.get(url);
   if (cached) return cached;
 
   const pending = fetchLinkPreview(url)

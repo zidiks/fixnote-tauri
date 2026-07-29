@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import type { FolderSummary } from '@fixnote/contracts';
 import {
   lazy,
   Suspense,
@@ -32,8 +33,12 @@ import { prepareImport } from './lib/imports';
 import { loadLinkPreview } from './lib/link-preview';
 
 type Screen =
-  | { kind: 'home' }
-  | { kind: 'resource'; resourceId: string };
+  | { kind: 'home'; folderId: string | null }
+  | {
+      kind: 'resource';
+      resourceId: string;
+      returnFolderId: string | null;
+    };
 
 const NoteEditor = lazy(() =>
   import('./components/NoteEditor').then((module) => ({
@@ -53,7 +58,10 @@ export function App() {
     resources: [],
   });
   const [loading, setLoading] = useState(true);
-  const [screen, setScreen] = useState<Screen>({ kind: 'home' });
+  const [screen, setScreen] = useState<Screen>({
+    kind: 'home',
+    folderId: null,
+  });
   const [chatOpen, setChatOpen] = useState(false);
   const [youtubePlayback, setYoutubePlayback] =
     useState<YoutubePlayback | null>(null);
@@ -78,19 +86,28 @@ export function App() {
         : undefined,
     [screen, snapshot.resources],
   );
+  const homeFolderId =
+    screen.kind === 'home' ? screen.folderId : screen.returnFolderId;
 
   async function addResource(
     kind: WorkspaceResource['kind'],
     title = kind === 'note' ? 'Untitled note' : 'Untitled board',
+    folderId: string | null = null,
+    position?: WorkspaceResource['position'],
   ) {
+    const siblingCount = snapshot.resources.filter(
+      (resource) => resource.folderId === folderId,
+    ).length;
     const resource = await createResource(
       {
         kind,
         title,
-        position: {
-          x: 280 + (snapshot.resources.length % 3) * 360,
-          y: 180 + Math.floor(snapshot.resources.length / 3) * 260,
-        },
+        folderId,
+        position:
+          position ?? {
+            x: 280 + (siblingCount % 3) * 360,
+            y: 180 + Math.floor(siblingCount / 3) * 260,
+          },
       },
       snapshot,
     );
@@ -135,7 +152,7 @@ export function App() {
       current?.resourceId === resourceId ? null : current,
     );
     if (screen.kind === 'resource' && screen.resourceId === resourceId) {
-      setScreen({ kind: 'home' });
+      setScreen({ kind: 'home', folderId: screen.returnFolderId });
     }
   }
 
@@ -200,6 +217,21 @@ export function App() {
     }));
   }
 
+  async function changeFolderColor(
+    folderId: string,
+    color: FolderSummary['color'],
+  ) {
+    const current = snapshot.folders.find((folder) => folder.id === folderId);
+    if (!current || current.color === color) return;
+    const updated = await updateFolder(current, { color });
+    setSnapshot((state) => ({
+      ...state,
+      folders: state.folders.map((folder) =>
+        folder.id === folderId ? updated : folder,
+      ),
+    }));
+  }
+
   async function moveFolder(folderId: string, parentId: string | null, position: { x: number; y: number }) {
     const current = snapshot.folders.find((folder) => folder.id === folderId);
     if (!current) return;
@@ -229,8 +261,16 @@ export function App() {
 
   async function applyAiProposal(proposal: AiProposal) {
     if (proposal.type === 'create_note') {
-      const created = await addResource('note', proposal.title);
-      setScreen({ kind: 'resource', resourceId: created.id });
+      const created = await addResource(
+        'note',
+        proposal.title,
+        activeResource?.folderId ?? null,
+      );
+      setScreen({
+        kind: 'resource',
+        resourceId: created.id,
+        returnFolderId: created.folderId,
+      });
       return;
     }
     if (proposal.type === 'rename' && activeResource) {
@@ -243,19 +283,24 @@ export function App() {
       <motion.main
         className="app-content"
       >
-        <AnimatePresence mode="wait">
+        <AnimatePresence initial={false} mode="wait">
           {screen.kind === 'home' || !activeResource ? (
             <motion.div
               key="home"
               className="screen-layer"
-              initial={{ opacity: 0, scale: 0.992 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.008 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             >
               <SpatialHome
                 loading={loading}
                 folders={snapshot.folders}
                 resources={snapshot.resources}
+                activeFolder={homeFolderId}
+                onActiveFolderChange={(folderId) =>
+                  setScreen({ kind: 'home', folderId })
+                }
                 activeYoutubeResourceId={youtubePlayback?.resourceId ?? null}
                 onToggleYoutube={(playback) =>
                   setYoutubePlayback((current) =>
@@ -265,7 +310,11 @@ export function App() {
                   )
                 }
                 onOpen={(resourceId) =>
-                  setScreen({ kind: 'resource', resourceId })
+                  setScreen({
+                    kind: 'resource',
+                    resourceId,
+                    returnFolderId: homeFolderId,
+                  })
                 }
                 onCreate={addResource}
                 onImport={importCandidates}
@@ -273,6 +322,7 @@ export function App() {
                 onPatch={patchResource}
                 onDelete={removeResource}
                 onRenameFolder={renameFolder}
+                onChangeFolderColor={changeFolderColor}
                 onDeleteFolder={removeFolder}
                 onMoveFolder={moveFolder}
                 onOpenChat={() => setChatOpen(true)}
@@ -283,14 +333,20 @@ export function App() {
             <motion.div
               key={activeResource.id}
               className="screen-layer"
-              initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -16 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             >
               <Suspense fallback={<ResourceLoading />}>
                 <NoteEditor
                   resource={activeResource}
-                  onBack={() => setScreen({ kind: 'home' })}
+                  onBack={() =>
+                    setScreen({
+                      kind: 'home',
+                      folderId: screen.returnFolderId,
+                    })
+                  }
                   onRename={(title) =>
                     patchResource(activeResource.id, { title })
                   }
@@ -302,14 +358,20 @@ export function App() {
             <motion.div
               key={activeResource.id}
               className="screen-layer"
-              initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -16 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             >
               <Suspense fallback={<ResourceLoading />}>
                 <BoardEditor
                   resource={activeResource}
-                  onBack={() => setScreen({ kind: 'home' })}
+                  onBack={() =>
+                    setScreen({
+                      kind: 'home',
+                      folderId: screen.returnFolderId,
+                    })
+                  }
                   onOpenChat={() => setChatOpen(true)}
                 />
               </Suspense>
@@ -328,9 +390,16 @@ export function App() {
         scope={activeResource ?? null}
         resources={snapshot.resources}
         onOpenChange={setChatOpen}
-        onOpenResource={(resourceId) =>
-          setScreen({ kind: 'resource', resourceId })
-        }
+        onOpenResource={(resourceId) => {
+          const resource = snapshot.resources.find(
+            (candidate) => candidate.id === resourceId,
+          );
+          setScreen({
+            kind: 'resource',
+            resourceId,
+            returnFolderId: resource?.folderId ?? homeFolderId,
+          });
+        }}
         onApplyProposal={applyAiProposal}
       />
     </div>

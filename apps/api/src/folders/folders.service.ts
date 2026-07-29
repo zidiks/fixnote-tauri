@@ -68,6 +68,7 @@ export class FoldersService {
           ...(input.position
             ? { positionX: input.position.x, positionY: input.position.y }
             : {}),
+          ...(input.color ? { color: input.color } : {}),
           nameCiphertext: dbBytes(encryptedName),
           wrappedDek: dbBytes(wrapped),
           keyVersion: this.crypto.keyVersion,
@@ -101,10 +102,12 @@ export class FoldersService {
     const data =
       input.name === undefined
         ? {
+            ...(input.color !== undefined ? { color: input.color } : {}),
             ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
             ...(input.position ? { positionX: input.position.x, positionY: input.position.y } : {}),
           }
         : {
+            ...(input.color !== undefined ? { color: input.color } : {}),
             nameCiphertext: dbBytes(
               this.crypto.envelope.encrypt(
                 Buffer.from(input.name, 'utf8'),
@@ -183,6 +186,7 @@ export class FoldersService {
       parentId: folder.parentId,
       position: { x: folder.positionX, y: folder.positionY },
       name,
+      color: folder.color as FolderSummary['color'],
       ownerId: folder.ownerId,
       createdAt: folder.createdAt.toISOString(),
       updatedAt: folder.updatedAt.toISOString(),

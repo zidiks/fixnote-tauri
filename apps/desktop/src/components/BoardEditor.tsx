@@ -7,6 +7,8 @@ import {
   Share2,
   StickyNote,
   Type,
+  Redo2,
+  Undo2,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -45,6 +47,17 @@ interface PeerCursor {
   y: number;
 }
 
+interface TextEditState {
+  id: string;
+  value: string;
+}
+
+interface BoardCamera {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 interface BoardEditorProps {
   resource: WorkspaceResource;
   onBack: () => void;
@@ -58,9 +71,28 @@ export function BoardEditor({
 }: BoardEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const drawingId = useRef<string | null>(null);
+  const panRef = useRef<{
+    startX: number;
+    startY: number;
+    cameraX: number;
+    cameraY: number;
+  } | null>(null);
   const [size, setSize] = useState({ width: 1200, height: 760 });
+  const [camera, setCamera] = useState<BoardCamera>({
+    x: 0,
+    y: 0,
+    scale: 1,
+  });
+  const [controlPressed, setControlPressed] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
   const [tool, setTool] = useState<BoardTool>('select');
   const [shapes, setShapes] = useState<BoardShape[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [textEdit, setTextEdit] = useState<TextEditState | null>(null);
+  const [historyState, setHistoryState] = useState({
+    canUndo: false,
+    canRedo: false,
+  });
   const [peers, setPeers] = useState<PeerCursor[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
   const { document, provider, status } = useCollaboration(resource.id);
@@ -69,6 +101,10 @@ export function BoardEditor({
     [document],
   );
   const order = useMemo(() => document.getArray<string>('order'), [document]);
+  const undoManager = useMemo(
+    () => new Y.UndoManager([shapeMap, order]),
+    [order, shapeMap],
+  );
 
   useEffect(() => {
     const element = containerRef.current;
@@ -124,13 +160,72 @@ export function BoardEditor({
           color: '#202522',
         });
       });
+      undoManager.clear();
     }
     refresh();
     return () => {
       shapeMap.unobserveDeep(refresh);
       order.unobserve(refresh);
     };
-  }, [document, order, shapeMap]);
+  }, [document, order, shapeMap, undoManager]);
+
+  useEffect(() => {
+    const refresh = () =>
+      setHistoryState({
+        canUndo: undoManager.undoStack.length > 0,
+        canRedo: undoManager.redoStack.length > 0,
+      });
+    undoManager.on('stack-item-added', refresh);
+    undoManager.on('stack-item-popped', refresh);
+    undoManager.on('stack-cleared', refresh);
+    undoManager.on('stack-item-updated', refresh);
+    refresh();
+    return () => {
+      undoManager.off('stack-item-added', refresh);
+      undoManager.off('stack-item-popped', refresh);
+      undoManager.off('stack-cleared', refresh);
+      undoManager.off('stack-item-updated', refresh);
+      undoManager.destroy();
+    };
+  }, [undoManager]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Control') setControlPressed(true);
+      if (isEditableElement(event.target)) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        setTextEdit(null);
+        setSelectedId(null);
+        if (event.shiftKey) undoManager.redo();
+        else undoManager.undo();
+        return;
+      }
+      if (
+        (event.key === 'Delete' || event.key === 'Backspace') &&
+        selectedId
+      ) {
+        event.preventDefault();
+        removeShape(selectedId);
+      }
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Control') setControlPressed(false);
+    };
+    const resetControl = () => {
+      setControlPressed(false);
+      setIsPanning(false);
+      panRef.current = null;
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', resetControl);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', resetControl);
+    };
+  }, [selectedId, undoManager]);
 
   useEffect(() => {
     const awareness = provider?.awareness;
@@ -160,40 +255,71 @@ export function BoardEditor({
 
   function addAt(x: number, y: number) {
     const common = { id: crypto.randomUUID(), x, y };
+    undoManager.stopCapturing();
     if (tool === 'sticky') {
-      putShape(shapeMap, order, {
+      const shape: BoardShape = {
         ...common,
         type: 'sticky',
         text: 'New thought',
         color: '#fff1a8',
-      });
+      };
+      putShape(shapeMap, order, shape);
+      setSelectedId(shape.id);
+      setTextEdit({ id: shape.id, value: shape.text ?? '' });
       setTool('select');
     } else if (tool === 'text') {
-      putShape(shapeMap, order, {
+      const shape: BoardShape = {
         ...common,
         type: 'text',
         text: 'Type something',
         color: '#202522',
-      });
+      };
+      putShape(shapeMap, order, shape);
+      setSelectedId(shape.id);
+      setTextEdit({ id: shape.id, value: shape.text ?? '' });
       setTool('select');
     } else if (tool === 'circle') {
-      putShape(shapeMap, order, {
+      const shape: BoardShape = {
         ...common,
         type: 'circle',
         radius: 56,
         color: '#7f8cff',
-      });
+      };
+      putShape(shapeMap, order, shape);
+      setSelectedId(shape.id);
       setTool('select');
     }
+    undoManager.stopCapturing();
   }
 
   function pointerPosition(event: KonvaEventObject<MouseEvent>) {
-    return event.target.getStage()?.getPointerPosition() ?? { x: 0, y: 0 };
+    const point = event.target.getStage()?.getPointerPosition() ?? {
+      x: 0,
+      y: 0,
+    };
+    return {
+      x: (point.x - camera.x) / camera.scale,
+      y: (point.y - camera.y) / camera.scale,
+    };
   }
 
   function handlePointerDown(event: KonvaEventObject<MouseEvent>) {
+    if (event.evt.ctrlKey) {
+      const point = event.target.getStage()?.getPointerPosition();
+      if (!point) return;
+      event.evt.preventDefault();
+      panRef.current = {
+        startX: point.x,
+        startY: point.y,
+        cameraX: camera.x,
+        cameraY: camera.y,
+      };
+      setIsPanning(true);
+      return;
+    }
     const point = pointerPosition(event);
     if (tool === 'draw') {
+      undoManager.stopCapturing();
       const id = crypto.randomUUID();
       drawingId.current = id;
       putShape(shapeMap, order, {
@@ -206,10 +332,25 @@ export function BoardEditor({
       });
       return;
     }
+    if (tool === 'select' && event.target === event.target.getStage()) {
+      setSelectedId(null);
+      setTextEdit(null);
+    }
     if (tool !== 'select') addAt(point.x, point.y);
   }
 
   function handlePointerMove(event: KonvaEventObject<MouseEvent>) {
+    const pan = panRef.current;
+    if (pan) {
+      const point = event.target.getStage()?.getPointerPosition();
+      if (!point) return;
+      setCamera((current) => ({
+        ...current,
+        x: pan.cameraX + point.x - pan.startX,
+        y: pan.cameraY + point.y - pan.startY,
+      }));
+      return;
+    }
     const point = pointerPosition(event);
     provider?.awareness?.setLocalStateField('cursor', point);
     const id = drawingId.current;
@@ -221,8 +362,87 @@ export function BoardEditor({
   }
 
   function handlePointerUp() {
+    panRef.current = null;
+    setIsPanning(false);
+    if (drawingId.current) undoManager.stopCapturing();
     drawingId.current = null;
   }
+
+  function handleWheel(event: KonvaEventObject<WheelEvent>) {
+    if (!event.evt.ctrlKey) return;
+    event.evt.preventDefault();
+    const point = event.target.getStage()?.getPointerPosition();
+    if (!point) return;
+    const nextScale = clamp(
+      camera.scale * Math.exp(-event.evt.deltaY * 0.001),
+      0.35,
+      2.5,
+    );
+    const worldX = (point.x - camera.x) / camera.scale;
+    const worldY = (point.y - camera.y) / camera.scale;
+    setCamera({
+      scale: nextScale,
+      x: point.x - worldX * nextScale,
+      y: point.y - worldY * nextScale,
+    });
+  }
+
+  function moveShape(id: string, x: number, y: number) {
+    const target = shapeMap.get(id);
+    if (!target) return;
+    undoManager.stopCapturing();
+    document.transact(() => {
+      target.set('x', x);
+      target.set('y', y);
+    });
+    undoManager.stopCapturing();
+  }
+
+  function beginTextEdit(shape: BoardShape) {
+    if (shape.type !== 'sticky' && shape.type !== 'text') return;
+    setSelectedId(shape.id);
+    setTextEdit({ id: shape.id, value: shape.text ?? '' });
+  }
+
+  function commitTextEdit() {
+    if (!textEdit) return;
+    const target = shapeMap.get(textEdit.id);
+    if (target && target.get('text') !== textEdit.value) {
+      undoManager.stopCapturing();
+      target.set('text', textEdit.value);
+      undoManager.stopCapturing();
+    }
+    setTextEdit(null);
+  }
+
+  function removeShape(id: string) {
+    const index = order.toArray().indexOf(id);
+    if (!shapeMap.has(id)) return;
+    undoManager.stopCapturing();
+    document.transact(() => {
+      shapeMap.delete(id);
+      if (index >= 0) order.delete(index, 1);
+    });
+    undoManager.stopCapturing();
+    setTextEdit(null);
+    setSelectedId(null);
+  }
+
+  function undo() {
+    setTextEdit(null);
+    setSelectedId(null);
+    undoManager.undo();
+  }
+
+  function redo() {
+    setTextEdit(null);
+    setSelectedId(null);
+    undoManager.redo();
+  }
+
+  const editingShape = textEdit
+    ? shapes.find((shape) => shape.id === textEdit.id)
+    : undefined;
 
   return (
     <div className="board-shell">
@@ -255,7 +475,12 @@ export function BoardEditor({
         </div>
       </header>
 
-      <div ref={containerRef} className="board-stage">
+      <div
+        ref={containerRef}
+        className={`board-stage${controlPressed ? ' is-control-navigation' : ''}${
+          isPanning ? ' is-panning' : ''
+        }`}
+      >
         <Stage
           width={size.width}
           height={size.height}
@@ -263,17 +488,27 @@ export function BoardEditor({
           onMouseMove={handlePointerMove}
           onMouseUp={handlePointerUp}
           onMouseLeave={handlePointerUp}
+          onWheel={handleWheel}
         >
-          <Layer>
+          <Layer
+            x={camera.x}
+            y={camera.y}
+            scaleX={camera.scale}
+            scaleY={camera.scale}
+          >
             {shapes.map((shape) => (
               <BoardShapeNode
                 key={shape.id}
                 shape={shape}
-                onMove={(x, y) => {
-                  const target = shapeMap.get(shape.id);
-                  target?.set('x', x);
-                  target?.set('y', y);
-                }}
+                selected={selectedId === shape.id}
+                draggable={
+                  tool === 'select' &&
+                  !controlPressed &&
+                  textEdit?.id !== shape.id
+                }
+                onSelect={() => setSelectedId(shape.id)}
+                onEdit={() => beginTextEdit(shape)}
+                onMove={(x, y) => moveShape(shape.id, x, y)}
               />
             ))}
             {peers.map((peer) => (
@@ -305,6 +540,50 @@ export function BoardEditor({
             ))}
           </Layer>
         </Stage>
+
+        {editingShape && textEdit && (
+          <textarea
+            key={editingShape.id}
+            className={`board-text-editor is-${editingShape.type}`}
+            style={{
+              left: camera.x + editingShape.x * camera.scale,
+              top: camera.y + editingShape.y * camera.scale,
+              transform: `scale(${camera.scale})`,
+              transformOrigin: 'top left',
+              color: editingShape.type === 'text'
+                ? editingShape.color ?? '#202522'
+                : '#242724',
+              background:
+                editingShape.type === 'sticky'
+                  ? editingShape.color ?? '#fff1a8'
+                  : 'transparent',
+            }}
+            value={textEdit.value}
+            autoFocus
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) =>
+              setTextEdit((current) =>
+                current ? { ...current, value: event.target.value } : current,
+              )
+            }
+            onBlur={commitTextEdit}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setTextEdit(null);
+              } else if (
+                event.key === 'Enter' &&
+                (event.ctrlKey || event.metaKey)
+              ) {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+            aria-label="Edit board text"
+          />
+        )}
 
         <div className="board-tools">
           <BoardToolButton
@@ -342,6 +621,23 @@ export function BoardEditor({
             icon={Circle}
             label="Circle"
           />
+          <span className="board-tools-divider" aria-hidden="true" />
+          <button
+            onClick={undo}
+            disabled={!historyState.canUndo}
+            title="Undo"
+            aria-label="Undo"
+          >
+            <Undo2 size={18} />
+          </button>
+          <button
+            onClick={redo}
+            disabled={!historyState.canRedo}
+            title="Redo"
+            aria-label="Redo"
+          >
+            <Redo2 size={18} />
+          </button>
         </div>
       </div>
       <ShareDialog
@@ -355,9 +651,17 @@ export function BoardEditor({
 
 function BoardShapeNode({
   shape,
+  selected,
+  draggable,
+  onSelect,
+  onEdit,
   onMove,
 }: {
   shape: BoardShape;
+  selected: boolean;
+  draggable: boolean;
+  onSelect: () => void;
+  onEdit: () => void;
   onMove: (x: number, y: number) => void;
 }) {
   if (shape.type === 'line') {
@@ -369,6 +673,9 @@ function BoardShapeNode({
         lineCap="round"
         lineJoin="round"
         tension={0.18}
+        opacity={selected ? 0.72 : 1}
+        onClick={onSelect}
+        onTap={onSelect}
       />
     );
   }
@@ -379,32 +686,69 @@ function BoardShapeNode({
         y={shape.y}
         radius={shape.radius ?? 56}
         stroke={shape.color ?? '#7f8cff'}
-        strokeWidth={4}
-        draggable
+        strokeWidth={selected ? 6 : 4}
+        draggable={draggable}
+        {...(selected
+          ? {
+              shadowColor: '#3c6554',
+              shadowBlur: 12,
+              shadowOpacity: 0.22,
+            }
+          : {})}
+        onClick={onSelect}
+        onTap={onSelect}
+        onDragStart={onSelect}
         onDragEnd={(event) => onMove(event.target.x(), event.target.y())}
       />
     );
   }
   if (shape.type === 'text') {
     return (
-      <Text
+      <Group
         x={shape.x}
         y={shape.y}
-        text={shape.text ?? ''}
-        fill={shape.color ?? '#202522'}
-        fontFamily="Inter, sans-serif"
-        fontSize={34}
-        fontStyle="bold"
-        draggable
+        draggable={draggable}
+        onClick={onSelect}
+        onTap={onSelect}
+        onDblClick={onEdit}
+        onDblTap={onEdit}
+        onDragStart={onSelect}
         onDragEnd={(event) => onMove(event.target.x(), event.target.y())}
-      />
+      >
+        {selected && (
+          <Rect
+            x={-10}
+            y={-8}
+            width={440}
+            height={62}
+            cornerRadius={8}
+            stroke="#557164"
+            strokeWidth={1.5}
+            dash={[5, 4]}
+          />
+        )}
+        <Text
+          width={420}
+          text={shape.text ?? ''}
+          fill={shape.color ?? '#202522'}
+          fontFamily="Inter, sans-serif"
+          fontSize={34}
+          fontStyle="bold"
+          lineHeight={1.15}
+        />
+      </Group>
     );
   }
   return (
     <Group
       x={shape.x}
       y={shape.y}
-      draggable
+      draggable={draggable}
+      onClick={onSelect}
+      onTap={onSelect}
+      onDblClick={onEdit}
+      onDblTap={onEdit}
+      onDragStart={onSelect}
       onDragEnd={(event) => onMove(event.target.x(), event.target.y())}
     >
       <Rect
@@ -416,6 +760,7 @@ function BoardShapeNode({
         shadowBlur={18}
         shadowOpacity={0.12}
         shadowOffsetY={8}
+        {...(selected ? { stroke: '#557164', strokeWidth: 2 } : {})}
       />
       <Text
         x={20}
@@ -429,6 +774,17 @@ function BoardShapeNode({
       />
     </Group>
   );
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    Boolean(target.closest('input, textarea, [contenteditable="true"]'))
+  );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function BoardToolButton({

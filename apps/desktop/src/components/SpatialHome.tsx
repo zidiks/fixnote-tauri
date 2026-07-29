@@ -11,7 +11,6 @@ import {
   FileArchive,
   FileImage,
   FileVideo,
-  Globe2,
   Image as ImageIcon,
   LogOut,
   Music2,
@@ -27,6 +26,7 @@ import {
 import {
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
+  type CSSProperties,
   type ReactNode,
   type WheelEvent,
   useMemo,
@@ -35,7 +35,11 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { FolderSummary, UpdateResourceInput } from '@fixnote/contracts';
+import type {
+  FolderColor,
+  FolderSummary,
+  UpdateResourceInput,
+} from '@fixnote/contracts';
 import { roomNames } from '@fixnote/sync';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
@@ -57,12 +61,16 @@ interface SpatialHomeProps {
   loading: boolean;
   folders: FolderSummary[];
   resources: WorkspaceResource[];
+  activeFolder: string | null;
+  onActiveFolderChange: (folderId: string | null) => void;
   activeYoutubeResourceId: string | null;
   onToggleYoutube: (playback: YoutubePlayback) => void;
   onOpen: (resourceId: string) => void;
   onCreate: (
     kind: WorkspaceResource['kind'],
     title?: string,
+    folderId?: string | null,
+    position?: WorkspaceResource['position'],
   ) => Promise<WorkspaceResource>;
   onImport: (
     candidates: ImportCandidate[],
@@ -72,6 +80,7 @@ interface SpatialHomeProps {
   onPatch: (resourceId: string, patch: UpdateResourceInput) => Promise<void>;
   onDelete: (resourceId: string) => Promise<void>;
   onRenameFolder: (folderId: string, name: string) => Promise<void>;
+  onChangeFolderColor: (folderId: string, color: FolderColor) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
   onMoveFolder: (folderId: string, parentId: string | null, position: WorkspaceResource['position']) => Promise<void>;
   onCreateFolder: (name: string, parentId: string | null, position: WorkspaceResource['position']) => Promise<void>;
@@ -168,6 +177,8 @@ export function SpatialHome({
   loading,
   folders,
   resources,
+  activeFolder,
+  onActiveFolderChange,
   activeYoutubeResourceId,
   onToggleYoutube,
   onOpen,
@@ -176,6 +187,7 @@ export function SpatialHome({
   onPatch,
   onDelete,
   onRenameFolder,
+  onChangeFolderColor,
   onDeleteFolder,
   onMoveFolder,
   onCreateFolder,
@@ -196,7 +208,6 @@ export function SpatialHome({
     scale: 0.9,
   });
   const [query, setQuery] = useState('');
-  const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [semanticIds, setSemanticIds] = useState<Set<string>>(new Set());
   const [folderPositions, setFolderPositions] =
     useState<FolderPositions>(loadFolderPositions);
@@ -226,7 +237,7 @@ export function SpatialHome({
     if (!viewport) return;
 
     const preventNativeZoom = (event: globalThis.WheelEvent) => {
-      if (event.altKey || event.ctrlKey || event.metaKey) {
+      if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
       }
     };
@@ -356,6 +367,7 @@ export function SpatialHome({
     if (event.button !== 0) return;
     const target = event.target;
     if (
+      !event.ctrlKey &&
       target instanceof Element &&
       target.closest('button, input, textarea, [data-no-canvas-pan]')
     ) {
@@ -391,7 +403,7 @@ export function SpatialHome({
 
   function zoom(event: WheelEvent<HTMLDivElement>) {
     event.preventDefault();
-    const isZoomGesture = event.altKey || event.ctrlKey || event.metaKey;
+    const isZoomGesture = event.ctrlKey || event.metaKey;
     if (!isZoomGesture) {
       const horizontalDelta =
         event.shiftKey && Math.abs(event.deltaX) < Math.abs(event.deltaY)
@@ -445,6 +457,23 @@ export function SpatialHome({
     return {
       x: snap((clientX - viewport.left - camera.x) / camera.scale),
       y: snap((clientY - viewport.top - camera.y) / camera.scale),
+    };
+  }
+
+  function creationPosition(
+    size: WorkspaceResource['size'],
+    itemCount: number,
+  ): WorkspaceResource['position'] {
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    if (!viewport) return { x: 0, y: 0 };
+    const center = clientToWorld(
+      viewport.left + viewport.width / 2,
+      viewport.top + viewport.height / 2,
+    );
+    const cascade = (itemCount % 4) * SNAP;
+    return {
+      x: snap(center.x - size.width / 2 + cascade),
+      y: snap(center.y - size.height / 2 + cascade),
     };
   }
 
@@ -586,7 +615,7 @@ export function SpatialHome({
 
       {activeFolder && (
         <div className="folder-breadcrumb">
-          <button onClick={() => setActiveFolder(null)}>All notes</button>
+          <button onClick={() => onActiveFolderChange(null)}>All notes</button>
           <span>/</span>
           <strong>
             {folders.find((folder) => folder.id === activeFolder)?.name}
@@ -682,12 +711,12 @@ export function SpatialHome({
                   scale={camera.scale}
                   count={count}
                   isDropTarget={dropTargetId === folder.id || folderDropTargetId === folder.id}
-                  onOpen={() => setActiveFolder(folder.id)}
+                  onOpen={() => onActiveFolderChange(folder.id)}
                   onOpenMenu={(x, y) =>
                     setFolderContextMenu({
                       folder,
                       x: Math.min(x, window.innerWidth - 204),
-                      y: Math.min(y, window.innerHeight - 154),
+                      y: Math.min(y, window.innerHeight - 224),
                     })
                   }
                   onMove={(nextPosition) => {
@@ -773,7 +802,7 @@ export function SpatialHome({
           onClose={() => setFolderContextMenu(null)}
           onOpen={() => {
             setFolderContextMenu(null);
-            setActiveFolder(folderContextMenu.folder.id);
+            onActiveFolderChange(folderContextMenu.folder.id);
           }}
           onRename={() => {
             const name = window.prompt(
@@ -785,6 +814,18 @@ export function SpatialHome({
             if (nextName && nextName !== folderContextMenu.folder.name) {
               void onRenameFolder(folderContextMenu.folder.id, nextName);
             }
+          }}
+          onColorChange={(color) => {
+            const { id } = folderContextMenu.folder;
+            setFolderContextMenu((current) =>
+              current
+                ? {
+                    ...current,
+                    folder: { ...current.folder, color },
+                  }
+                : null,
+            );
+            void onChangeFolderColor(id, color);
           }}
           onDelete={() => {
             const confirmed = window.confirm(
@@ -820,7 +861,15 @@ export function SpatialHome({
                 role="menuitem"
                 onClick={() => {
                   setCreateMenuOpen(false);
-                  void onCreate('note');
+                  void onCreate(
+                    'note',
+                    undefined,
+                    activeFolder,
+                    creationPosition(
+                      { width: 320, height: 220 },
+                      visibleResources.length + visibleFolders.length,
+                    ),
+                  );
                 }}
               >
                 <FileText size={16} />
@@ -829,13 +878,18 @@ export function SpatialHome({
               <button
                 role="menuitem"
                 onClick={() => {
+                  const parentId = activeFolder;
                   const name = window.prompt('Folder name', 'Untitled folder')?.trim();
                   if (!name) return;
                   setCreateMenuOpen(false);
-                  void onCreateFolder(name, activeFolder, {
-                    x: 180 + (visibleFolders.length % 3) * 340,
-                    y: 430 + Math.floor(visibleFolders.length / 3) * 220,
-                  });
+                  void onCreateFolder(
+                    name,
+                    parentId,
+                    creationPosition(
+                      FOLDER_SIZE,
+                      visibleResources.length + visibleFolders.length,
+                    ),
+                  );
                 }}
               >
                 <FolderPlus size={16} />
@@ -845,7 +899,15 @@ export function SpatialHome({
                 role="menuitem"
                 onClick={() => {
                   setCreateMenuOpen(false);
-                  void onCreate('board');
+                  void onCreate(
+                    'board',
+                    undefined,
+                    activeFolder,
+                    creationPosition(
+                      { width: 320, height: 220 },
+                      visibleResources.length + visibleFolders.length,
+                    ),
+                  );
                 }}
               >
                 <Shapes size={16} />
@@ -920,6 +982,7 @@ function ResourceCard({
     type: 'move' | 'resize',
   ) {
     if (event.button !== 0) return;
+    if (event.ctrlKey) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setInteractionType(type);
@@ -1057,11 +1120,15 @@ function ResourceCard({
         onOpenMenu(event.clientX, event.clientY);
       }}
     >
-      {resource.imported ? (
-        <ImportedPreview
-          resource={resource}
-          youtubePlaying={youtubeActive}
-        />
+      {resource.imported?.kind === 'link' ? (
+        <div className="link-card-clip">
+          <ImportedPreview
+            resource={resource}
+            youtubePlaying={youtubeActive}
+          />
+        </div>
+      ) : resource.imported ? (
+        <ImportedPreview resource={resource} youtubePlaying={youtubeActive} />
       ) : resource.kind === 'note' ? (
         <NotePreview resource={resource} />
       ) : (
@@ -1164,18 +1231,12 @@ function ImportedPreview({
       <div
         className={`imported-preview link-preview og-preview link-${imported.linkType}${imageUrl ? ' has-image' : ''}`}
       >
-        {imageUrl ? (
-          <img
-            className="link-preview-image"
-            src={imageUrl}
-            alt=""
-            draggable={false}
-          />
-        ) : (
-          <span className="link-preview-fallback">
-            <Globe2 size={42} strokeWidth={1.3} />
-          </span>
-        )}
+        <LinkPreviewArtwork
+          src={imageUrl}
+          url={imported.url}
+          host={imported.host}
+          title={title}
+        />
         <div className="link-preview-copy">
           <small>{siteName}</small>
           <strong>{title}</strong>
@@ -1224,10 +1285,17 @@ function useLinkPreviewMetadata(
   useEffect(() => {
     let disposed = false;
     setMetadata(imported?.metadata ?? null);
-    if (!imported || imported.metadata) return;
-    void loadLinkPreview(imported.url)
+    if (!imported || imported.metadata?.imageUrl) return;
+    void loadLinkPreview(imported.url, {
+      refresh: Boolean(imported.metadata),
+    })
       .then((next) => {
-        if (!disposed) setMetadata(next);
+        if (!disposed) {
+          setMetadata((current) => ({
+            ...current,
+            ...next,
+          }));
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -1236,6 +1304,73 @@ function useLinkPreviewMetadata(
   }, [imported]);
 
   return metadata;
+}
+
+function LinkPreviewArtwork({
+  src,
+  url,
+  host,
+  title,
+}: {
+  src: string | null;
+  url: string;
+  host: string;
+  title: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const [faviconFailed, setFaviconFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    setFaviconFailed(false);
+  }, [src, url]);
+
+  if (!src || failed) {
+    const hue = hashHue(host);
+    const monogram = (host.replace(/^www\./, '')[0] ?? title[0] ?? 'W')
+      .toLocaleUpperCase();
+    const faviconUrl = `${new URL(url).origin}/favicon.ico`;
+    return (
+      <span
+        className="link-preview-fallback is-generated"
+        style={{ '--link-preview-hue': hue } as CSSProperties}
+        aria-hidden="true"
+      >
+        <span className="link-preview-orb">
+          {!faviconFailed && (
+            <img
+              src={faviconUrl}
+              alt=""
+              draggable={false}
+              referrerPolicy="no-referrer"
+              onError={() => setFaviconFailed(true)}
+            />
+          )}
+          {faviconFailed && <b>{monogram}</b>}
+        </span>
+        <i>{host}</i>
+      </span>
+    );
+  }
+
+  return (
+    <img
+      className="link-preview-image"
+      src={src}
+      alt=""
+      draggable={false}
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function hashHue(value: string): number {
+  let hash = 0;
+  for (const character of value) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash % 360;
 }
 
 function ImportBadge({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
@@ -1341,6 +1476,41 @@ function renderPreviewNode(node: Node, key: number): ReactNode {
       return <s key={key}>{children}</s>;
     case 'highlight':
       return <mark key={key}>{children}</mark>;
+    case 'markerhighlight':
+      return (
+        <mark
+          key={key}
+          style={{
+            backgroundColor:
+              element.getAttribute('color') ??
+              element.getAttribute('data-marker-color') ??
+              '#f6df68',
+          }}
+        >
+          {children}
+        </mark>
+      );
+    case 'link': {
+      const href = element.getAttribute('href');
+      return href ? (
+        <a key={key} href={href} tabIndex={-1}>
+          {children}
+        </a>
+      ) : (
+        <span key={key}>{children}</span>
+      );
+    }
+    case 'image': {
+      const src = element.getAttribute('src');
+      return src ? (
+        <img
+          key={key}
+          className="note-preview-image"
+          src={src}
+          alt={element.getAttribute('alt') ?? ''}
+        />
+      ) : null;
+    }
     case 'hardbreak':
       return <br key={key} />;
     default:
@@ -1402,11 +1572,13 @@ function FolderContextMenu({
   onClose,
   onOpen,
   onRename,
+  onColorChange,
   onDelete,
 }: FolderContextMenuState & {
   onClose: () => void;
   onOpen: () => void;
   onRename: () => void;
+  onColorChange: (color: FolderColor) => void;
   onDelete: () => void;
 }) {
   return (
@@ -1427,6 +1599,19 @@ function FolderContextMenu({
       <button role="menuitem" onClick={onRename}>
         <Pencil size={15} /> Rename
       </button>
+      <div className="folder-color-picker" aria-label="Folder color">
+        {FOLDER_COLORS.map(({ value, label }) => (
+          <button
+            key={value}
+            type="button"
+            className={`folder-color-swatch is-${value}`}
+            aria-label={label}
+            aria-pressed={(folder.color ?? 'default') === value}
+            title={label}
+            onClick={() => onColorChange(value)}
+          />
+        ))}
+      </div>
       <span className="resource-context-menu-divider" />
       <button className="is-danger" role="menuitem" onClick={onDelete}>
         <Trash2 size={15} /> Delete
@@ -1481,6 +1666,7 @@ function FolderStack({
 
   function begin(event: ReactPointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return;
+    if (event.ctrlKey) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     interaction.current = {
@@ -1548,7 +1734,7 @@ function FolderStack({
 
   return (
     <button
-      className={`folder-stack${dragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
+      className={`folder-stack folder-color-${folder.color ?? 'default'}${dragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
       style={{ left: position.x, top: position.y }}
       onPointerDown={begin}
       onPointerMove={move}
@@ -1584,6 +1770,17 @@ function FolderStack({
 function snap(value: number) {
   return Math.round(value / SNAP) * SNAP;
 }
+
+const FOLDER_COLORS: ReadonlyArray<{
+  value: FolderColor;
+  label: string;
+}> = [
+  { value: 'default', label: 'Default' },
+  { value: 'sage', label: 'Sage' },
+  { value: 'sky', label: 'Sky' },
+  { value: 'yellow', label: 'Yellow' },
+  { value: 'rose', label: 'Rose' },
+];
 
 function candidatesFromTransfer(dataTransfer: DataTransfer): ImportCandidate[] {
   const files = Array.from(dataTransfer.files);

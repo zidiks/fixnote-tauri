@@ -1,5 +1,10 @@
 import { X } from 'lucide-react';
-import { useLayoutEffect, useRef, useState } from 'react';
+import {
+  type PointerEvent as ReactPointerEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { YoutubePlayback } from '../domain';
 
 interface PersistentYoutubePlayerProps {
@@ -16,6 +21,21 @@ interface PlayerGeometry {
   docked: boolean;
 }
 
+type FloatCorner =
+  | 'top-left'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-right';
+
+interface PlayerDrag {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originLeft: number;
+  originTop: number;
+  moved: boolean;
+}
+
 const FLOAT_WIDTH = 336;
 const FLOAT_GAP = 22;
 const FLOAT_BOTTOM = 88;
@@ -24,40 +44,56 @@ export function PersistentYoutubePlayer({
   playback,
   onClose,
 }: PersistentYoutubePlayerProps) {
-  const [geometry, setGeometry] = useState<PlayerGeometry>(() =>
-    floatingGeometry(),
-  );
+  const [docked, setDocked] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   const [positionedResourceId, setPositionedResourceId] = useState<
     string | null
   >(null);
-  const geometryRef = useRef(geometry);
+  const playerRef = useRef<HTMLElement>(null);
+  const floatCornerRef = useRef<FloatCorner>('bottom-right');
+  const geometryRef = useRef(floatingGeometry(floatCornerRef.current));
+  const dragRef = useRef<PlayerDrag | null>(null);
+  const suppressClickRef = useRef(false);
   const transitionTimerRef = useRef<number | null>(null);
 
+  function beginTransition(player: HTMLElement) {
+    player.classList.add('is-transitioning');
+    void player.offsetWidth;
+    setTransitioning(true);
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+    }
+    transitionTimerRef.current = window.setTimeout(() => {
+      setTransitioning(false);
+      transitionTimerRef.current = null;
+    }, 280);
+  }
+
   useLayoutEffect(() => {
-    if (!playback) return;
+    const player = playerRef.current;
+    if (!playback || !player) return;
     let frame = 0;
     let firstMeasurement = true;
+    player.classList.remove('is-transitioning');
     setTransitioning(false);
 
     const update = () => {
-      const next = measurePlayer(playback.resourceId);
-      if (!sameGeometry(geometryRef.current, next)) {
-        if (
-          !firstMeasurement &&
-          geometryRef.current.docked !== next.docked
-        ) {
-          setTransitioning(true);
-          if (transitionTimerRef.current !== null) {
-            window.clearTimeout(transitionTimerRef.current);
-          }
-          transitionTimerRef.current = window.setTimeout(() => {
-            setTransitioning(false);
-            transitionTimerRef.current = null;
-          }, 280);
+      if (dragRef.current) {
+        frame = window.requestAnimationFrame(update);
+        return;
+      }
+      const next = measurePlayer(
+        playback.resourceId,
+        floatCornerRef.current,
+      );
+      if (firstMeasurement || !sameGeometry(geometryRef.current, next)) {
+        const dockChanged = geometryRef.current.docked !== next.docked;
+        if (!firstMeasurement && dockChanged) {
+          beginTransition(player);
         }
+        applyGeometry(player, next);
         geometryRef.current = next;
-        setGeometry(next);
+        if (firstMeasurement || dockChanged) setDocked(next.docked);
       }
       if (firstMeasurement) {
         firstMeasurement = false;
@@ -78,22 +114,103 @@ export function PersistentYoutubePlayer({
 
   if (!playback) return null;
 
+  function beginDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (docked || event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('button')) return;
+    const player = playerRef.current;
+    if (!player) return;
+    event.preventDefault();
+    suppressClickRef.current = false;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originLeft: geometryRef.current.left,
+      originTop: geometryRef.current.top,
+      moved: false,
+    };
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+    player.classList.remove('is-transitioning');
+    player.classList.add('is-dragging');
+    setTransitioning(false);
+    player.setPointerCapture(event.pointerId);
+  }
+
+  function moveDrag(event: ReactPointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    const player = playerRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !player) return;
+    event.preventDefault();
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) >= 4) drag.moved = true;
+    const current = geometryRef.current;
+    const next: PlayerGeometry = {
+      ...current,
+      left: clamp(
+        drag.originLeft + dx,
+        FLOAT_GAP,
+        Math.max(FLOAT_GAP, window.innerWidth - current.width - FLOAT_GAP),
+      ),
+      top: clamp(
+        drag.originTop + dy,
+        FLOAT_GAP,
+        Math.max(FLOAT_GAP, window.innerHeight - current.height - FLOAT_GAP),
+      ),
+      docked: false,
+    };
+    applyGeometry(player, next);
+    geometryRef.current = next;
+  }
+
+  function endDrag(event: ReactPointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    const player = playerRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !player) return;
+    dragRef.current = null;
+    player.classList.remove('is-dragging');
+    if (player.hasPointerCapture(event.pointerId)) {
+      player.releasePointerCapture(event.pointerId);
+    }
+    if (!drag.moved) return;
+
+    event.preventDefault();
+    suppressClickRef.current = true;
+    const corner = nearestCorner(geometryRef.current);
+    floatCornerRef.current = corner;
+    const next = floatingGeometry(corner);
+    beginTransition(player);
+    applyGeometry(player, next);
+    geometryRef.current = next;
+  }
+
   return (
     <aside
-      className={`persistent-youtube-player ${geometry.docked ? 'is-docked' : 'is-floating'}${transitioning ? ' is-transitioning' : ''}`}
+      ref={playerRef}
+      className={`persistent-youtube-player ${docked ? 'is-docked' : 'is-floating'}${transitioning ? ' is-transitioning' : ''}`}
       style={{
-        left: geometry.left,
-        top: geometry.top,
-        width: geometry.width,
-        height: geometry.height,
-        borderRadius: geometry.radius,
         visibility:
           positionedResourceId === playback.resourceId
             ? 'visible'
             : 'hidden',
       }}
+      onPointerDown={beginDrag}
+      onPointerMove={moveDrag}
+      onPointerUp={endDrag}
+      onPointerCancel={(event) => {
+        endDrag(event);
+        suppressClickRef.current = false;
+      }}
       onClick={() => {
-        if (!geometry.docked) onClose();
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          return;
+        }
+        if (!docked) onClose();
       }}
       onContextMenu={(event) => event.preventDefault()}
       aria-label={`Playing ${playback.title}`}
@@ -126,11 +243,14 @@ export function PersistentYoutubePlayer({
   );
 }
 
-function measurePlayer(resourceId: string): PlayerGeometry {
+function measurePlayer(
+  resourceId: string,
+  floatCorner: FloatCorner,
+): PlayerGeometry {
   const anchor = document.querySelector<HTMLElement>(
     `[data-youtube-anchor="${CSS.escape(resourceId)}"]`,
   );
-  if (!anchor) return floatingGeometry();
+  if (!anchor) return floatingGeometry(floatCorner);
 
   const rect = anchor.getBoundingClientRect();
   const visible =
@@ -140,7 +260,7 @@ function measurePlayer(resourceId: string): PlayerGeometry {
     rect.bottom > 0 &&
     rect.left < window.innerWidth &&
     rect.top < window.innerHeight;
-  if (!visible) return floatingGeometry();
+  if (!visible) return floatingGeometry(floatCorner);
 
   const scale = anchor.offsetWidth > 0 ? rect.width / anchor.offsetWidth : 1;
   return {
@@ -153,12 +273,18 @@ function measurePlayer(resourceId: string): PlayerGeometry {
   };
 }
 
-function floatingGeometry(): PlayerGeometry {
+function floatingGeometry(corner: FloatCorner): PlayerGeometry {
   const width = Math.min(FLOAT_WIDTH, Math.max(240, window.innerWidth - 44));
   const height = width * (9 / 16);
+  const right = corner.endsWith('right');
+  const bottom = corner.startsWith('bottom');
   return {
-    left: Math.max(FLOAT_GAP, window.innerWidth - width - FLOAT_GAP),
-    top: Math.max(FLOAT_GAP, window.innerHeight - height - FLOAT_BOTTOM),
+    left: right
+      ? Math.max(FLOAT_GAP, window.innerWidth - width - FLOAT_GAP)
+      : FLOAT_GAP,
+    top: bottom
+      ? Math.max(FLOAT_GAP, window.innerHeight - height - FLOAT_BOTTOM)
+      : FLOAT_GAP,
     width,
     height,
     radius: 18,
@@ -166,13 +292,48 @@ function floatingGeometry(): PlayerGeometry {
   };
 }
 
+function nearestCorner(geometry: PlayerGeometry): FloatCorner {
+  const horizontal =
+    geometry.left + geometry.width / 2 < window.innerWidth / 2
+      ? 'left'
+      : 'right';
+  const vertical =
+    geometry.top + geometry.height / 2 < window.innerHeight / 2
+      ? 'top'
+      : 'bottom';
+  return `${vertical}-${horizontal}`;
+}
+
 function sameGeometry(a: PlayerGeometry, b: PlayerGeometry): boolean {
   return (
     a.docked === b.docked &&
-    Math.abs(a.left - b.left) < 0.5 &&
-    Math.abs(a.top - b.top) < 0.5 &&
-    Math.abs(a.width - b.width) < 0.5 &&
-    Math.abs(a.height - b.height) < 0.5 &&
-    Math.abs(a.radius - b.radius) < 0.5
+    Math.abs(a.left - b.left) < 0.01 &&
+    Math.abs(a.top - b.top) < 0.01 &&
+    Math.abs(a.width - b.width) < 0.01 &&
+    Math.abs(a.height - b.height) < 0.01 &&
+    Math.abs(a.radius - b.radius) < 0.01
   );
+}
+
+function applyGeometry(
+  player: HTMLElement,
+  geometry: PlayerGeometry,
+): void {
+  const left = alignToScreenPixel(geometry.left);
+  const top = alignToScreenPixel(geometry.top);
+  const right = alignToScreenPixel(geometry.left + geometry.width);
+  const bottom = alignToScreenPixel(geometry.top + geometry.height);
+  player.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+  player.style.width = `${Math.max(0, right - left)}px`;
+  player.style.height = `${Math.max(0, bottom - top)}px`;
+  player.style.borderRadius = `${geometry.radius}px`;
+}
+
+function alignToScreenPixel(value: number): number {
+  const ratio = window.devicePixelRatio || 1;
+  return Math.round(value * ratio) / ratio;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

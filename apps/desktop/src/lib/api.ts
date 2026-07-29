@@ -171,7 +171,7 @@ export async function deleteResource(
 
 export async function updateFolder(
   folder: FolderSummary,
-  input: { name?: string; parentId?: string | null; position?: { x: number; y: number } },
+  input: { name?: string; color?: FolderSummary['color']; parentId?: string | null; position?: { x: number; y: number } },
 ): Promise<FolderSummary> {
   const optimistic = { ...folder, ...input, updatedAt: new Date().toISOString() };
   try {
@@ -201,6 +201,7 @@ export async function createFolder(
       id: parsed.id ?? crypto.randomUUID(),
       ownerId: import.meta.env.VITE_MOCK_USER_ID ?? '00000000-0000-4000-8000-000000000001',
       name: parsed.name,
+      color: parsed.color ?? 'default',
       parentId: parsed.parentId ?? null,
       position: parsed.position ?? { x: 180, y: 420 },
       createdAt: now,

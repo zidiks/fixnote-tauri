@@ -1,4 +1,5 @@
 import Collaboration from '@tiptap/extension-collaboration';
+import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Mark, mergeAttributes } from '@tiptap/core';
 import {
@@ -13,14 +14,22 @@ import {
   Bot,
   Braces,
   EyeOff,
+  Highlighter,
   Italic,
   Link2,
   MessageSquareQuote,
+  MousePointer2,
   Share2,
   Strikethrough,
   UnderlineIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { WorkspaceResource } from '../domain';
 import { useImportedAssetUrl } from '../lib/use-imported-asset-url';
 import { useCollaboration } from '../lib/use-collaboration';
@@ -37,6 +46,34 @@ interface ToolbarPosition {
   left: number;
   top: number;
 }
+
+type EditorMode = 'cursor' | 'marker';
+
+interface MarkerStroke {
+  pointerId: number;
+  lastPosition: number;
+}
+
+interface MarkerWheelState {
+  pointerId: number;
+  x: number;
+  y: number;
+  selectedIndex: number;
+}
+
+const MARKER_COLORS = [
+  { name: 'Yellow', value: '#f6df68' },
+  { name: 'Coral', value: '#f5a09a' },
+  { name: 'Pink', value: '#efacd2' },
+  { name: 'Violet', value: '#c9b6f2' },
+  { name: 'Blue', value: '#9bcdf0' },
+  { name: 'Mint', value: '#a9dfc2' },
+] as const;
+
+const MARKER_OPTIONS = [
+  { name: 'Default', value: 'default', swatch: '#f3f4f1' },
+  ...MARKER_COLORS.map((color) => ({ ...color, swatch: color.value })),
+] as const;
 
 const Spoiler = Mark.create({
   name: 'spoiler',
@@ -55,6 +92,36 @@ const Spoiler = Mark.create({
   },
 });
 
+const MarkerHighlight = Mark.create({
+  name: 'markerHighlight',
+  inclusive: false,
+  addAttributes() {
+    return {
+      color: {
+        default: MARKER_COLORS[0].value,
+        parseHTML: (element) =>
+          element.getAttribute('data-marker-color') ??
+          MARKER_COLORS[0].value,
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'mark[data-marker-color]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    const { color, ...attributes } = HTMLAttributes;
+    return [
+      'mark',
+      mergeAttributes(attributes, {
+        'data-marker-color': color,
+        class: 'inline-marker',
+        style: `background-color: ${String(color)}`,
+      }),
+      0,
+    ];
+  },
+});
+
 export function NoteEditor({
   resource,
   onBack,
@@ -64,8 +131,17 @@ export function NoteEditor({
   const [title, setTitle] = useState(resource.title);
   const [toolbar, setToolbar] = useState<ToolbarPosition | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [mode, setMode] = useState<EditorMode>('cursor');
+  const [markerColor, setMarkerColor] = useState<string>(
+    MARKER_COLORS[0].value,
+  );
+  const [markerWheel, setMarkerWheel] =
+    useState<MarkerWheelState | null>(null);
+  const [markerDrawing, setMarkerDrawing] = useState(false);
   const { document, status, hydrated } = useCollaboration(resource.id);
   const importedContentApplied = useRef(false);
+  const markerStrokeRef = useRef<MarkerStroke | null>(null);
+  const titleRef = useRef<HTMLTextAreaElement>(null);
   const imageAssetId =
     resource.imported?.kind === 'file' &&
     resource.imported.fileType === 'image'
@@ -81,19 +157,76 @@ export function NoteEditor({
           link: {
             openOnClick: false,
             autolink: true,
+            linkOnPaste: true,
+            markdownLinks: true,
             HTMLAttributes: { rel: 'noopener noreferrer' },
+          },
+        }),
+        Image.configure({
+          allowBase64: true,
+          HTMLAttributes: {
+            class: 'note-inline-image',
+            loading: 'lazy',
+          },
+          resize: {
+            enabled: true,
+            minWidth: 120,
+            minHeight: 80,
+            alwaysPreserveAspectRatio: true,
           },
         }),
         Placeholder.configure({
           placeholder: 'Start with a thought…',
         }),
         Spoiler,
+        MarkerHighlight,
         Collaboration.configure({ document, field: 'content' }),
       ],
       editorProps: {
         attributes: {
           class: 'note-prose',
           spellcheck: 'true',
+        },
+        handlePaste(view, event) {
+          const imageFiles = imageFilesFrom(event.clipboardData);
+          if (imageFiles.length) {
+            event.preventDefault();
+            void insertImageFiles(view, imageFiles).catch(() => undefined);
+            return true;
+          }
+
+          const pastedText = event.clipboardData
+            ?.getData('text/plain')
+            .trim();
+          const href = pastedText ? safeHttpUrl(pastedText) : null;
+          if (href && view.state.selection.empty) {
+            const link = view.state.schema.marks.link;
+            if (!link) return false;
+            event.preventDefault();
+            view.dispatch(
+              view.state.tr
+                .replaceSelectionWith(
+                  view.state.schema.text(pastedText!, [
+                    link.create({
+                      href,
+                      rel: 'noopener noreferrer',
+                      target: '_blank',
+                    }),
+                  ]),
+                )
+                .scrollIntoView(),
+            );
+            return true;
+          }
+          return false;
+        },
+        handleDrop(view, event, _slice, moved) {
+          if (moved) return false;
+          const imageFiles = imageFilesFrom(event.dataTransfer);
+          if (!imageFiles.length) return false;
+          event.preventDefault();
+          void insertImageFiles(view, imageFiles).catch(() => undefined);
+          return true;
         },
       },
       onSelectionUpdate({ editor: currentEditor }) {
@@ -107,6 +240,16 @@ export function NoteEditor({
   );
 
   useEffect(() => setTitle(resource.title), [resource.title]);
+
+  useLayoutEffect(() => {
+    resizeTitle(titleRef.current);
+  }, [title]);
+
+  useEffect(() => {
+    const handleResize = () => resizeTitle(titleRef.current);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     if (!editor || !hydrated || importedContentApplied.current || !editor.isEmpty) return;
@@ -128,8 +271,126 @@ export function NoteEditor({
     if (next !== resource.title) void onRename(next);
   }
 
+  function beginEditorGesture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (mode !== 'marker' || !editor) return;
+
+    if (event.button === 2) {
+      event.preventDefault();
+      event.stopPropagation();
+      const selectedIndex = Math.max(
+        0,
+        MARKER_OPTIONS.findIndex((option) => option.value === markerColor),
+      );
+      setMarkerWheel({
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        selectedIndex,
+      });
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest('.note-prose')) return;
+    const position = editor.view.posAtCoords({
+      left: event.clientX,
+      top: event.clientY,
+    })?.pos;
+    if (position === undefined) return;
+
+    event.preventDefault();
+    setToolbar(null);
+    markerStrokeRef.current = {
+      pointerId: event.pointerId,
+      lastPosition: position,
+    };
+    setMarkerDrawing(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    editor.view.focus();
+  }
+
+  function moveEditorGesture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (
+      markerWheel &&
+      markerWheel.pointerId === event.pointerId
+    ) {
+      event.preventDefault();
+      const selectedIndex = markerSectorAt(
+        event.clientX - markerWheel.x,
+        event.clientY - markerWheel.y,
+        markerWheel.selectedIndex,
+      );
+      if (selectedIndex !== markerWheel.selectedIndex) {
+        setMarkerWheel((current) =>
+          current ? { ...current, selectedIndex } : current,
+        );
+      }
+      return;
+    }
+
+    const stroke = markerStrokeRef.current;
+    if (!stroke || stroke.pointerId !== event.pointerId || !editor) return;
+    event.preventDefault();
+    const position = editor.view.posAtCoords({
+      left: event.clientX,
+      top: event.clientY,
+    })?.pos;
+    if (position === undefined || position === stroke.lastPosition) return;
+
+    const from = Math.min(stroke.lastPosition, position);
+    const to = Math.max(stroke.lastPosition, position);
+    const marker = editor.schema.marks.markerHighlight;
+    if (marker && from < to) {
+      const transaction = editor.state.tr;
+      if (markerColor === 'default') {
+        transaction.removeMark(from, to, marker);
+      } else {
+        transaction.addMark(from, to, marker.create({ color: markerColor }));
+      }
+      editor.view.dispatch(transaction);
+    }
+    stroke.lastPosition = position;
+  }
+
+  function endEditorGesture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (markerWheel?.pointerId === event.pointerId) {
+      event.preventDefault();
+      setMarkerColor(MARKER_OPTIONS[markerWheel.selectedIndex]!.value);
+      setMarkerWheel(null);
+    }
+    if (markerStrokeRef.current?.pointerId === event.pointerId) {
+      markerStrokeRef.current = null;
+      setMarkerDrawing(false);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function cancelEditorGesture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (markerWheel?.pointerId === event.pointerId) setMarkerWheel(null);
+    if (markerStrokeRef.current?.pointerId === event.pointerId) {
+      markerStrokeRef.current = null;
+      setMarkerDrawing(false);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   return (
-    <div className="document-shell">
+    <div
+      className={`document-shell${mode === 'marker' ? ' is-marker-mode' : ''}${markerDrawing ? ' is-marker-drawing' : ''}`}
+      onPointerDown={beginEditorGesture}
+      onPointerMove={moveEditorGesture}
+      onPointerUp={endEditorGesture}
+      onPointerCancel={cancelEditorGesture}
+      onContextMenu={(event) => {
+        if (mode === 'marker') event.preventDefault();
+      }}
+    >
       <header className="document-header">
         <button className="round-back" onClick={onBack} aria-label="Back">
           <ArrowLeft size={20} />
@@ -153,8 +414,10 @@ export function NoteEditor({
       </header>
 
       <main className="note-page">
-        <input
+        <textarea
+          ref={titleRef}
           className="note-title"
+          rows={1}
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           onBlur={saveTitle}
@@ -187,6 +450,22 @@ export function NoteEditor({
       {editor && toolbar && (
         <SelectionToolbar editor={editor} position={toolbar} />
       )}
+      <EditorModeToolbar
+        mode={mode}
+        markerColor={markerColor}
+        onChange={(nextMode) => {
+          setMode(nextMode);
+          setMarkerDrawing(false);
+          setToolbar(null);
+        }}
+      />
+      {markerWheel && (
+        <MarkerColorWheel
+          x={markerWheel.x}
+          y={markerWheel.y}
+          selectedIndex={markerWheel.selectedIndex}
+        />
+      )}
       <ShareDialog
         open={shareOpen}
         resource={resource}
@@ -194,6 +473,206 @@ export function NoteEditor({
       />
     </div>
   );
+}
+
+function EditorModeToolbar({
+  mode,
+  markerColor,
+  onChange,
+}: {
+  mode: EditorMode;
+  markerColor: string;
+  onChange: (mode: EditorMode) => void;
+}) {
+  return (
+    <div className="note-mode-toolbar" aria-label="Editor mode">
+      <button
+        className={mode === 'cursor' ? 'is-active' : ''}
+        onClick={() => onChange('cursor')}
+        title="Cursor"
+        aria-label="Cursor mode"
+        aria-pressed={mode === 'cursor'}
+      >
+        <MousePointer2 size={17} />
+      </button>
+      <button
+        className={mode === 'marker' ? 'is-active' : ''}
+        onClick={() => onChange('marker')}
+        title="Marker · right-drag to choose color"
+        aria-label="Marker mode"
+        aria-pressed={mode === 'marker'}
+      >
+        <Highlighter size={17} />
+        <i
+          className={markerColor === 'default' ? 'is-default' : ''}
+          style={
+            markerColor === 'default'
+              ? undefined
+              : { background: markerColor }
+          }
+        />
+      </button>
+    </div>
+  );
+}
+
+function MarkerColorWheel({
+  x,
+  y,
+  selectedIndex,
+}: {
+  x: number;
+  y: number;
+  selectedIndex: number;
+}) {
+  return (
+    <div
+      className="marker-color-wheel"
+      style={{ left: x, top: y }}
+      aria-label={`${MARKER_OPTIONS[selectedIndex]!.name} marker`}
+    >
+      <svg viewBox="0 0 176 176" aria-hidden="true">
+        <defs>
+          <pattern
+            id="marker-default-pattern"
+            width="8"
+            height="8"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width="8" height="8" fill="#f3f4f1" />
+            <rect width="2" height="8" fill="#c9ceca" />
+          </pattern>
+        </defs>
+        {MARKER_OPTIONS.map((option, index) => (
+          <path
+            key={option.value}
+            className={index === selectedIndex ? 'is-selected' : ''}
+            d={markerSectorPath(index, index === selectedIndex ? 79 : 72)}
+            fill={
+              option.value === 'default'
+                ? 'url(#marker-default-pattern)'
+                : option.swatch
+            }
+          />
+        ))}
+        <circle cx="88" cy="88" r="25" className="marker-wheel-center" />
+        <circle
+          cx="88"
+          cy="88"
+          r="8"
+          fill={MARKER_OPTIONS[selectedIndex]!.swatch}
+          className="marker-wheel-current"
+        />
+        {MARKER_OPTIONS[selectedIndex]!.value === 'default' && (
+          <path
+            d="M 83 83 L 93 93 M 93 83 L 83 93"
+            className="marker-wheel-remove"
+          />
+        )}
+      </svg>
+    </div>
+  );
+}
+
+function markerSectorAt(
+  dx: number,
+  dy: number,
+  fallback: number,
+): number {
+  if (Math.hypot(dx, dy) < 30) return fallback;
+  const angle = (Math.atan2(dy, dx) + Math.PI / 2 + Math.PI * 2) %
+    (Math.PI * 2);
+  return Math.floor(angle / ((Math.PI * 2) / MARKER_OPTIONS.length));
+}
+
+function markerSectorPath(index: number, outerRadius: number): string {
+  const center = 88;
+  const innerRadius = 31;
+  const step = (Math.PI * 2) / MARKER_OPTIONS.length;
+  const gap = 0.025;
+  const start = -Math.PI / 2 + index * step + gap;
+  const end = -Math.PI / 2 + (index + 1) * step - gap;
+  const outerStart = polarPoint(center, outerRadius, start);
+  const outerEnd = polarPoint(center, outerRadius, end);
+  const innerEnd = polarPoint(center, innerRadius, end);
+  const innerStart = polarPoint(center, innerRadius, start);
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerRadius} ${outerRadius} 0 0 1 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerEnd.x} ${innerEnd.y}`,
+    `A ${innerRadius} ${innerRadius} 0 0 0 ${innerStart.x} ${innerStart.y}`,
+    'Z',
+  ].join(' ');
+}
+
+function polarPoint(center: number, radius: number, angle: number) {
+  return {
+    x: center + Math.cos(angle) * radius,
+    y: center + Math.sin(angle) * radius,
+  };
+}
+
+function resizeTitle(element: HTMLTextAreaElement | null) {
+  if (!element) return;
+  element.style.height = '0px';
+  element.style.height = `${element.scrollHeight}px`;
+}
+
+function imageFilesFrom(transfer: DataTransfer | null): File[] {
+  if (!transfer) return [];
+  return Array.from(transfer.files).filter((file) =>
+    file.type.startsWith('image/'),
+  );
+}
+
+async function insertImageFiles(
+  view: Editor['view'],
+  files: File[],
+): Promise<void> {
+  const imageType = view.state.schema.nodes.image;
+  if (!imageType) return;
+  for (const file of files) {
+    const src = await readFileAsDataUrl(file);
+    if (view.isDestroyed) return;
+    view.dispatch(
+      view.state.tr
+        .replaceSelectionWith(
+          imageType.create({
+            src,
+            alt: file.name || 'Pasted image',
+            title: file.name || null,
+          }),
+        )
+        .scrollIntoView(),
+    );
+  }
+  view.focus();
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Could not read image'));
+    });
+    reader.addEventListener('error', () =>
+      reject(reader.error ?? new Error('Could not read image')),
+    );
+    reader.readAsDataURL(file);
+  });
+}
+
+function safeHttpUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function textFromImport(resource: WorkspaceResource): string | null {

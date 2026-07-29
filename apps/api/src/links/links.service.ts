@@ -38,8 +38,9 @@ async function fetchHtml(
         signal: AbortSignal.timeout(6_000),
         headers: {
           accept: 'text/html,application/xhtml+xml',
+          'accept-language': 'en-US,en;q=0.9',
           'user-agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FixNoteLinkPreview/0.1',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         },
       });
     } catch {
@@ -184,10 +185,16 @@ export function extractLinkPreview(html: string, pageUrl: URL): LinkPreview {
   const image = firstValue(
     metadata.get('og:image:secure_url'),
     metadata.get('og:image'),
+    metadata.get('og:image:url'),
     metadata.get('twitter:image'),
     metadata.get('twitter:image:src'),
+    metadata.get('image'),
   );
-  const imageUrl = image ? resolveHttpUrl(image, pageUrl) : undefined;
+  const imageUrl =
+    (image ? resolveHttpUrl(image, pageUrl) : undefined) ??
+    imageFromLinkTag(html, pageUrl) ??
+    imageFromJsonLd(html, pageUrl) ??
+    imageFromContent(html, pageUrl);
   const siteName = firstValue(
     metadata.get('og:site_name'),
     metadata.get('application-name'),
@@ -199,6 +206,131 @@ export function extractLinkPreview(html: string, pageUrl: URL): LinkPreview {
     ...(imageUrl ? { imageUrl } : {}),
     ...(siteName ? { siteName: cleanText(siteName, 80) } : {}),
   };
+}
+
+function imageFromLinkTag(html: string, pageUrl: URL): string | undefined {
+  for (const match of html.matchAll(/<link\b([^>]*)>/gi)) {
+    const attributes = parseAttributes(match[1] ?? '');
+    const rel = attributes.rel?.toLowerCase().split(/\s+/) ?? [];
+    if (!rel.includes('image_src')) continue;
+    const imageUrl = attributes.href
+      ? resolveHttpUrl(attributes.href, pageUrl)
+      : undefined;
+    if (imageUrl) return imageUrl;
+  }
+  return undefined;
+}
+
+function imageFromJsonLd(html: string, pageUrl: URL): string | undefined {
+  for (const match of html.matchAll(
+    /<script\b([^>]*)>([\s\S]*?)<\/script>/gi,
+  )) {
+    const attributes = parseAttributes(match[1] ?? '');
+    if (attributes.type?.toLowerCase() !== 'application/ld+json') continue;
+    try {
+      const value: unknown = JSON.parse(match[2] ?? '');
+      const candidate = findJsonLdImage(value);
+      const imageUrl = candidate
+        ? resolveHttpUrl(candidate, pageUrl)
+        : undefined;
+      if (imageUrl) return imageUrl;
+    } catch {
+      // Invalid third-party JSON-LD should not discard the rest of the page.
+    }
+  }
+  return undefined;
+}
+
+function findJsonLdImage(value: unknown): string | undefined {
+  if (typeof value === 'string') return undefined;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const image = findJsonLdImage(entry);
+      if (image) return image;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== 'object') return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['image', 'thumbnailUrl', 'thumbnail']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string') return candidate;
+    if (Array.isArray(candidate)) {
+      const first = candidate.find(
+        (entry): entry is string => typeof entry === 'string',
+      );
+      if (first) return first;
+    }
+    if (candidate && typeof candidate === 'object') {
+      const url = (candidate as Record<string, unknown>).url;
+      if (typeof url === 'string') return url;
+    }
+  }
+
+  for (const child of Object.values(record)) {
+    const image = findJsonLdImage(child);
+    if (image) return image;
+  }
+  return undefined;
+}
+
+function imageFromContent(html: string, pageUrl: URL): string | undefined {
+  let best: { url: string; score: number } | undefined;
+  for (const match of html.matchAll(/<img\b([^>]*)>/gi)) {
+    const attributes = parseAttributes(match[1] ?? '');
+    const rawSource =
+      attributes['data-src'] ??
+      attributes['data-lazy-src'] ??
+      attributes.src ??
+      largestSrcsetEntry(attributes.srcset);
+    if (!rawSource) continue;
+    const url = resolveHttpUrl(rawSource, pageUrl);
+    if (!url) continue;
+
+    const searchable = `${url} ${attributes.class ?? ''} ${
+      attributes.id ?? ''
+    } ${attributes.alt ?? ''}`.toLowerCase();
+    if (
+      /(?:logo|icon|avatar|emoji|sprite|spacer|pixel|tracking|counter|captcha)/.test(
+        searchable,
+      )
+    ) {
+      continue;
+    }
+
+    const width = numericDimension(attributes.width);
+    const height = numericDimension(attributes.height);
+    if ((width !== undefined && width < 180) || (height !== undefined && height < 100)) {
+      continue;
+    }
+
+    let score = 0;
+    if (width && height) score += Math.min((width * height) / 500, 1_600);
+    if (width && width >= 600) score += 220;
+    if (height && height >= 300) score += 180;
+    if (/(?:upload|media|content|article|news|post|images?)/.test(searchable)) {
+      score += 320;
+    }
+    if (attributes.loading?.toLowerCase() === 'lazy') score += 40;
+
+    if (!best || score > best.score) best = { url, score };
+  }
+  return best?.score && best.score >= 200 ? best.url : undefined;
+}
+
+function largestSrcsetEntry(value: string | undefined): string | undefined {
+  return value
+    ?.split(',')
+    .map((entry) => entry.trim().split(/\s+/)[0])
+    .filter((entry): entry is string => Boolean(entry))
+    .at(-1);
+}
+
+function numericDimension(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function parseAttributes(source: string): Record<string, string> {

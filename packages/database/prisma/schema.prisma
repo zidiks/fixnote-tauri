@@ -68,6 +68,7 @@ model Folder {
   parentId       String?   @db.Uuid
   positionX      Float     @default(0)
   positionY      Float     @default(0)
+  color          String    @default("default")
   nameCiphertext Bytes
   wrappedDek     Bytes
   keyVersion     Int
