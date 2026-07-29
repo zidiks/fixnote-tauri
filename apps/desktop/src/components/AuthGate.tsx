@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { isMockAuth, supabaseClient } from '../lib/api';
+import { BrandMark } from './BrandMark';
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -37,7 +38,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (checking) {
     return (
       <div className="auth-loading">
-        <span className="brand-mark">f</span>
+        <BrandMark className="brand-mark" />
         Restoring encrypted session…
       </div>
     );
@@ -46,7 +47,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!supabaseClient) {
     return (
       <div className="auth-loading auth-config-error">
-        <span className="brand-mark">f</span>
+        <BrandMark className="brand-mark" />
         <strong>Supabase is not configured</strong>
         <small>Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.</small>
       </div>
@@ -97,7 +98,7 @@ function AuthScreen() {
         transition={{ type: 'spring', stiffness: 260, damping: 26 }}
       >
         <div className="auth-brand">
-          <span className="brand-mark">f</span>
+          <BrandMark className="brand-mark" />
           <div>
             <strong>FixNote</strong>
             <small>Your ideas, remembered.</small>

@@ -520,10 +520,6 @@ export function SpatialHome({
   return (
     <div className="spatial-shell">
       <header className="spatial-topbar">
-        <button className="brand-button" onClick={() => setActiveFolder(null)}>
-          <span className="brand-mark">f</span>
-          <span>FixNote</span>
-        </button>
         <div className="search-box">
           <Search size={16} />
           <input
@@ -953,7 +949,7 @@ function ResourceCard({
 
   return (
     <article
-      className={`resource-card accent-${resource.accent}${resource.kind === 'note' && !resource.imported ? ' is-note' : ''}${resource.imported ? ` is-imported imported-${resource.imported.kind}` : ''}${dragging ? ' is-dragging' : ''}`}
+      className={`resource-card accent-${resource.accent}${resource.kind === 'note' && !resource.imported ? ' is-note' : ''}${resource.imported ? ` is-imported imported-${resource.imported.kind}${resource.imported.kind === 'file' ? ` imported-file-${resource.imported.fileType}` : ''}` : ''}${dragging ? ' is-dragging' : ''}`}
       style={{
         left: position.x,
         top: position.y,
@@ -1041,12 +1037,19 @@ function ImportedPreview({ resource }: { resource: WorkspaceResource }) {
   }
 
   const fileMeta = filePresentation(imported.fileType);
+  if (imported.fileType === 'image') {
+    return (
+      <div className="imported-image-preview">
+        {assetUrl ? <img src={assetUrl} alt="" draggable={false} /> : <span />}
+        <time dateTime={resource.updatedAt}>{formatUpdatedAt(resource.updatedAt)}</time>
+      </div>
+    );
+  }
+
   return (
     <div className={`imported-preview file-preview file-${imported.fileType}`}>
       <ImportBadge icon={fileMeta.icon} label={fileMeta.label} />
-      {imported.fileType === 'image' && assetUrl ? (
-        <img src={assetUrl} alt="" draggable={false} />
-      ) : imported.fileType === 'video' && assetUrl ? (
+      {imported.fileType === 'video' && assetUrl ? (
         <video src={assetUrl} muted preload="metadata" />
       ) : (
         <div className="file-preview-icon">
