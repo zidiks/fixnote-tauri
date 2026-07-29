@@ -4,6 +4,7 @@ import {
   candidatesFromText,
   classifyFile,
   classifyLink,
+  youtubeVideoId,
 } from './imports.js';
 
 test('classifies common link families', () => {
@@ -28,4 +29,19 @@ test('classifies files by mime type and extension', () => {
   assert.equal(classifyFile({ name: 'notes.md', type: '' }), 'text');
   assert.equal(classifyFile({ name: 'deck.pptx', type: '' }), 'document');
   assert.equal(classifyFile({ name: 'backup.zip', type: '' }), 'archive');
+});
+
+test('extracts YouTube ids from common URL formats', () => {
+  assert.equal(
+    youtubeVideoId(new URL('https://www.youtube.com/watch?v=dQw4w9WgXcQ')),
+    'dQw4w9WgXcQ',
+  );
+  assert.equal(
+    youtubeVideoId(new URL('https://youtu.be/dQw4w9WgXcQ?t=20')),
+    'dQw4w9WgXcQ',
+  );
+  assert.equal(
+    youtubeVideoId(new URL('https://youtube.com/shorts/dQw4w9WgXcQ')),
+    'dQw4w9WgXcQ',
+  );
 });

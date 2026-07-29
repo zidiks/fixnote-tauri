@@ -19,12 +19,27 @@ export type ImportedFileType =
   | 'archive'
   | 'file';
 
+export interface LinkPreviewMetadata {
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+  siteName?: string;
+}
+
+export interface YoutubePlayback {
+  resourceId: string;
+  videoId: string;
+  title: string;
+}
+
 export type ImportedContent =
   | {
       kind: 'link';
       url: string;
       host: string;
       linkType: LinkType;
+      videoId?: string;
+      metadata?: LinkPreviewMetadata;
     }
   | {
       kind: 'text';

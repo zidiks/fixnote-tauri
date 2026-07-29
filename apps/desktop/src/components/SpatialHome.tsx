@@ -1,7 +1,6 @@
 import {
   type LucideIcon,
   Bot,
-  Code2,
   FileText,
   ArrowUpRight,
   Command,
@@ -14,7 +13,6 @@ import {
   FileVideo,
   Globe2,
   Image as ImageIcon,
-  Link2,
   LogOut,
   Music2,
   Pencil,
@@ -25,8 +23,6 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  Video,
-  Youtube,
 } from 'lucide-react';
 import {
   type DragEvent as ReactDragEvent,
@@ -45,17 +41,24 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
 import type {
   ImportCandidate,
+  ImportedContent,
   ImportedFileType,
-  LinkType,
+  LinkPreviewMetadata,
   WorkspaceResource,
+  YoutubePlayback,
 } from '../domain';
-import { loadImportedAsset, searchWorkspace } from '../lib/api';
-import { candidatesFromText } from '../lib/imports';
+import { searchWorkspace } from '../lib/api';
+import { candidatesFromText, youtubeVideoId } from '../lib/imports';
+import { loadLinkPreview } from '../lib/link-preview';
+import { openExternalUrl } from '../lib/open-external';
+import { useImportedAssetUrl } from '../lib/use-imported-asset-url';
 
 interface SpatialHomeProps {
   loading: boolean;
   folders: FolderSummary[];
   resources: WorkspaceResource[];
+  activeYoutubeResourceId: string | null;
+  onToggleYoutube: (playback: YoutubePlayback) => void;
   onOpen: (resourceId: string) => void;
   onCreate: (
     kind: WorkspaceResource['kind'],
@@ -83,11 +86,15 @@ interface Camera {
 }
 
 const SNAP = 24;
+const FOLDER_SIZE = {
+  width: SNAP * 12,
+  height: SNAP * 7,
+};
 const FOLDER_POSITION_STORAGE_KEY = 'fixnote:folder-positions';
 const defaultFolderPositions = [
-  { x: -160, y: 520 },
-  { x: 260, y: 560 },
-  { x: 720, y: 520 },
+  { x: -168, y: 528 },
+  { x: 264, y: 552 },
+  { x: 720, y: 528 },
 ];
 
 type FolderPositions = Record<string, WorkspaceResource['position']>;
@@ -95,16 +102,21 @@ type FolderPositions = Record<string, WorkspaceResource['position']>;
 function defaultFolderPosition(index: number): WorkspaceResource['position'] {
   return (
     defaultFolderPositions[index] ?? {
-      x: 1140 + (index - 3) * 340,
-      y: 540,
+      x: 1152 + (index - 3) * 336,
+      y: 528,
     }
   );
 }
 
 function folderPosition(folder: FolderSummary, index: number, local: FolderPositions) {
-  return folder.position.x !== 0 || folder.position.y !== 0
-    ? folder.position
-    : local[folder.id] ?? defaultFolderPosition(index);
+  const position =
+    folder.position.x !== 0 || folder.position.y !== 0
+      ? folder.position
+      : local[folder.id] ?? defaultFolderPosition(index);
+  return {
+    x: snap(position.x),
+    y: snap(position.y),
+  };
 }
 
 interface ResourceContextMenuState {
@@ -156,6 +168,8 @@ export function SpatialHome({
   loading,
   folders,
   resources,
+  activeYoutubeResourceId,
+  onToggleYoutube,
   onOpen,
   onCreate,
   onImport,
@@ -316,7 +330,7 @@ export function SpatialHome({
       ...visibleFolders.map((folder) => {
         const index = folders.findIndex((item) => item.id === folder.id);
         const position = folderPosition(folder, index, folderPositions);
-        return { ...position, width: 300, height: 176 };
+        return { ...position, ...FOLDER_SIZE };
       }),
     ];
     if (!items.length) return;
@@ -417,9 +431,9 @@ export function SpatialHome({
       const targetPosition = folderPosition(entry, index, folderPositions);
       return (
         center.x >= targetPosition.x &&
-        center.x <= targetPosition.x + 300 &&
+        center.x <= targetPosition.x + FOLDER_SIZE.width &&
         center.y >= targetPosition.y &&
-        center.y <= targetPosition.y + 176
+        center.y <= targetPosition.y + FOLDER_SIZE.height
       );
     });
     return folder?.id ?? null;
@@ -509,11 +523,19 @@ export function SpatialHome({
   }
 
   function folderDropTargetFor(folderId: string, position: WorkspaceResource['position']) {
-    const center = { x: position.x + 150, y: position.y + 88 };
+    const center = {
+      x: position.x + FOLDER_SIZE.width / 2,
+      y: position.y + FOLDER_SIZE.height / 2,
+    };
     return visibleFolders.find((candidate, index) => {
       if (candidate.id === folderId) return false;
       const target = folderPosition(candidate, index, folderPositions);
-      return center.x >= target.x && center.x <= target.x + 300 && center.y >= target.y && center.y <= target.y + 176;
+      return (
+        center.x >= target.x &&
+        center.x <= target.x + FOLDER_SIZE.width &&
+        center.y >= target.y &&
+        center.y <= target.y + FOLDER_SIZE.height
+      );
     })?.id ?? null;
   }
 
@@ -597,7 +619,7 @@ export function SpatialHome({
         <div
           className="spatial-world"
           style={{
-            transform: `translate3d(${camera.x}px, ${camera.y}px, 0) scale(${camera.scale})`,
+            transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`,
           }}
         >
           {loading ? (
@@ -608,6 +630,8 @@ export function SpatialHome({
                 key={resource.id}
                 resource={resource}
                 scale={camera.scale}
+                youtubeActive={activeYoutubeResourceId === resource.id}
+                onToggleYoutube={onToggleYoutube}
                 onOpen={() => onOpen(resource.id)}
                 onOpenMenu={(x, y) =>
                   setContextMenu({
@@ -846,6 +870,8 @@ export function SpatialHome({
 interface ResourceCardProps {
   resource: WorkspaceResource;
   scale: number;
+  youtubeActive: boolean;
+  onToggleYoutube: (playback: YoutubePlayback) => void;
   onOpen: () => void;
   onOpenMenu: (x: number, y: number) => void;
   onCommit: (
@@ -864,6 +890,8 @@ interface ResourceCardProps {
 function ResourceCard({
   resource,
   scale,
+  youtubeActive,
+  onToggleYoutube,
   onOpen,
   onOpenMenu,
   onCommit,
@@ -872,7 +900,9 @@ function ResourceCard({
 }: ResourceCardProps) {
   const [position, setPosition] = useState(resource.position);
   const [size, setSize] = useState(resource.size);
-  const [dragging, setDragging] = useState(false);
+  const [interactionType, setInteractionType] = useState<
+    'move' | 'resize' | null
+  >(null);
   const interaction = useRef<{
     type: 'move' | 'resize';
     pointerId: number;
@@ -880,6 +910,8 @@ function ResourceCard({
     startY: number;
     position: typeof position;
     size: typeof size;
+    currentPosition: typeof position;
+    currentSize: typeof size;
     moved: boolean;
   } | null>(null);
 
@@ -890,7 +922,7 @@ function ResourceCard({
     if (event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDragging(type === 'move');
+    setInteractionType(type);
     interaction.current = {
       type,
       pointerId: event.pointerId,
@@ -898,6 +930,8 @@ function ResourceCard({
       startY: event.clientY,
       position,
       size,
+      currentPosition: position,
+      currentSize: size,
       moved: false,
     };
   }
@@ -911,16 +945,26 @@ function ResourceCard({
     if (Math.abs(dx) + Math.abs(dy) > 3) active.moved = true;
     if (active.type === 'move') {
       const nextPosition = {
-        x: snap(active.position.x + dx),
-        y: snap(active.position.y + dy),
+        x: active.position.x + dx,
+        y: active.position.y + dy,
       };
+      active.currentPosition = nextPosition;
       setPosition(nextPosition);
-      if (active.moved) onDragMove(nextPosition, size, event.clientX, event.clientY);
+      if (active.moved) {
+        onDragMove(
+          nextPosition,
+          active.currentSize,
+          event.clientX,
+          event.clientY,
+        );
+      }
     } else {
-      setSize({
-        width: clamp(snap(active.size.width + dx), 240, 960),
-        height: clamp(snap(active.size.height + dy), 168, 720),
-      });
+      const nextSize = {
+        width: clamp(active.size.width + dx, 240, 960),
+        height: clamp(active.size.height + dy, 168, 720),
+      };
+      active.currentSize = nextSize;
+      setSize(nextSize);
     }
   }
 
@@ -929,18 +973,59 @@ function ResourceCard({
     if (!active || active.pointerId !== event.pointerId) return;
     event.stopPropagation();
     interaction.current = null;
-    setDragging(false);
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    if (!active.moved && active.type === 'move') onOpen();
-    else onCommit(position, size);
+    setInteractionType(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (!active.moved && active.type === 'move') {
+      activate();
+    } else {
+      const settledPosition =
+        active.type === 'move'
+          ? {
+              x: snap(active.currentPosition.x),
+              y: snap(active.currentPosition.y),
+            }
+          : active.currentPosition;
+      const settledSize = {
+        width: clamp(snap(active.currentSize.width), 240, 960),
+        height: clamp(snap(active.currentSize.height), 168, 720),
+      };
+      setPosition(settledPosition);
+      setSize(settledSize);
+      onCommit(settledPosition, settledSize);
+    }
     onDragEnd();
+  }
+
+  function activate() {
+    const imported = resource.imported;
+    if (imported?.kind !== 'link') {
+      onOpen();
+      return;
+    }
+    if (imported.linkType === 'youtube') {
+      const videoId =
+        imported.videoId ?? youtubeVideoId(new URL(imported.url));
+      if (videoId) {
+        onToggleYoutube({
+          resourceId: resource.id,
+          videoId,
+          title: resource.title,
+        });
+        return;
+      }
+    }
+    void openExternalUrl(imported.url);
   }
 
   function cancel(event: ReactPointerEvent<HTMLElement>) {
     const active = interaction.current;
     if (!active || active.pointerId !== event.pointerId) return;
     interaction.current = null;
-    setDragging(false);
+    setInteractionType(null);
+    setPosition(active.position);
+    setSize(active.size);
     onDragEnd();
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -949,13 +1034,19 @@ function ResourceCard({
 
   return (
     <article
-      className={`resource-card accent-${resource.accent}${resource.kind === 'note' && !resource.imported ? ' is-note' : ''}${resource.imported ? ` is-imported imported-${resource.imported.kind}${resource.imported.kind === 'file' ? ` imported-file-${resource.imported.fileType}` : ''}` : ''}${dragging ? ' is-dragging' : ''}`}
+      className={`resource-card accent-${resource.accent}${resource.kind === 'note' && !resource.imported ? ' is-note' : ''}${resource.imported ? ` is-imported imported-${resource.imported.kind}${resource.imported.kind === 'file' ? ` imported-file-${resource.imported.fileType}` : ''}` : ''}${interactionType ? ` is-interacting is-${interactionType}` : ''}${interactionType === 'move' ? ' is-dragging' : ''}`}
       style={{
         left: position.x,
         top: position.y,
         width: size.width,
         height: size.height,
       }}
+      data-youtube-anchor={
+        resource.imported?.kind === 'link' &&
+        resource.imported.linkType === 'youtube'
+          ? resource.id
+          : undefined
+      }
       onPointerDown={(event) => begin(event, 'move')}
       onPointerMove={move}
       onPointerUp={end}
@@ -967,7 +1058,10 @@ function ResourceCard({
       }}
     >
       {resource.imported ? (
-        <ImportedPreview resource={resource} />
+        <ImportedPreview
+          resource={resource}
+          youtubePlaying={youtubeActive}
+        />
       ) : resource.kind === 'note' ? (
         <NotePreview resource={resource} />
       ) : (
@@ -1004,10 +1098,19 @@ function ResourceCard({
   );
 }
 
-function ImportedPreview({ resource }: { resource: WorkspaceResource }) {
+function ImportedPreview({
+  resource,
+  youtubePlaying,
+}: {
+  resource: WorkspaceResource;
+  youtubePlaying: boolean;
+}) {
   const imported = resource.imported!;
   const assetUrl = useImportedAssetUrl(
     imported.kind === 'file' ? imported.assetId : null,
+  );
+  const linkMetadata = useLinkPreviewMetadata(
+    imported.kind === 'link' ? imported : null,
   );
 
   if (imported.kind === 'text') {
@@ -1021,17 +1124,64 @@ function ImportedPreview({ resource }: { resource: WorkspaceResource }) {
   }
 
   if (imported.kind === 'link') {
-    const linkMeta = linkPresentation(imported.linkType);
-    return (
-      <div className={`imported-preview link-preview link-${imported.linkType}`}>
-        <ImportBadge icon={linkMeta.icon} label={linkMeta.label} />
-        <div className="link-preview-visual">
-          <linkMeta.icon size={30} strokeWidth={1.7} />
-          {imported.linkType === 'youtube' && <span className="link-play">▶</span>}
+    const videoId =
+      imported.videoId ??
+      (imported.linkType === 'youtube'
+        ? youtubeVideoId(new URL(imported.url))
+        : null);
+    const title = linkMetadata?.title || resource.title;
+    const description = linkMetadata?.description || resource.preview;
+    const siteName = linkMetadata?.siteName || imported.host;
+    const imageUrl =
+      linkMetadata?.imageUrl ||
+      (videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : null);
+
+    if (imported.linkType === 'youtube' && videoId) {
+      return (
+        <div
+          className={`imported-preview link-preview youtube-preview${youtubePlaying ? ' is-playing' : ''}`}
+        >
+          <img
+            className="link-preview-image"
+            src={imageUrl!}
+            alt=""
+            draggable={false}
+          />
+          {!youtubePlaying && (
+              <span className="youtube-play" aria-hidden="true">
+                <span />
+              </span>
+          )}
+          <div className="link-preview-copy">
+            <small>YouTube</small>
+            <strong>{title}</strong>
+          </div>
         </div>
-        <h2>{resource.title}</h2>
-        <p>{imported.host}</p>
-        <ArrowUpRight className="import-open-mark" size={16} />
+      );
+    }
+
+    return (
+      <div
+        className={`imported-preview link-preview og-preview link-${imported.linkType}${imageUrl ? ' has-image' : ''}`}
+      >
+        {imageUrl ? (
+          <img
+            className="link-preview-image"
+            src={imageUrl}
+            alt=""
+            draggable={false}
+          />
+        ) : (
+          <span className="link-preview-fallback">
+            <Globe2 size={42} strokeWidth={1.3} />
+          </span>
+        )}
+        <div className="link-preview-copy">
+          <small>{siteName}</small>
+          <strong>{title}</strong>
+          {description && <p>{description}</p>}
+        </div>
+        <ArrowUpRight className="import-open-mark" size={17} />
       </div>
     );
   }
@@ -1062,49 +1212,38 @@ function ImportedPreview({ resource }: { resource: WorkspaceResource }) {
   );
 }
 
+type ImportedLink = Extract<ImportedContent, { kind: 'link' }>;
+
+function useLinkPreviewMetadata(
+  imported: ImportedLink | null,
+): LinkPreviewMetadata | null {
+  const [metadata, setMetadata] = useState<LinkPreviewMetadata | null>(
+    imported?.metadata ?? null,
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    setMetadata(imported?.metadata ?? null);
+    if (!imported || imported.metadata) return;
+    void loadLinkPreview(imported.url)
+      .then((next) => {
+        if (!disposed) setMetadata(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [imported]);
+
+  return metadata;
+}
+
 function ImportBadge({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
   return (
     <span className="import-badge">
       <Icon size={12} strokeWidth={1.8} /> {label}
     </span>
   );
-}
-
-function useImportedAssetUrl(assetId: string | null) {
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let disposed = false;
-    let objectUrl: string | null = null;
-    if (!assetId) {
-      setUrl(null);
-      return;
-    }
-    void loadImportedAsset(assetId).then((blob) => {
-      if (!blob || disposed) return;
-      objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
-    });
-    return () => {
-      disposed = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [assetId]);
-
-  return url;
-}
-
-function linkPresentation(type: LinkType): { icon: LucideIcon; label: string } {
-  return {
-    youtube: { icon: Youtube, label: 'YouTube' },
-    video: { icon: Video, label: 'Video link' },
-    audio: { icon: Music2, label: 'Audio link' },
-    social: { icon: Link2, label: 'Social post' },
-    code: { icon: Code2, label: 'Code' },
-    document: { icon: FileText, label: 'Document link' },
-    article: { icon: FileText, label: 'Article' },
-    website: { icon: Globe2, label: 'Website' },
-  }[type];
 }
 
 function filePresentation(type: ImportedFileType): { icon: LucideIcon; label: string } {
@@ -1365,8 +1504,8 @@ function FolderStack({
       setDragging(true);
     }
     const nextPosition = {
-      x: snap(active.startPosition.x + dx),
-      y: snap(active.startPosition.y + dy),
+      x: active.startPosition.x + dx,
+      y: active.startPosition.y + dy,
     };
     active.position = nextPosition;
     setPosition(nextPosition);
@@ -1379,9 +1518,19 @@ function FolderStack({
     event.stopPropagation();
     interaction.current = null;
     setDragging(false);
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    if (active.moved) onMove(active.position);
-    else onOpen();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (active.moved) {
+      const settledPosition = {
+        x: snap(active.position.x),
+        y: snap(active.position.y),
+      };
+      setPosition(settledPosition);
+      onMove(settledPosition);
+    } else {
+      onOpen();
+    }
     onDragEnd();
   }
 

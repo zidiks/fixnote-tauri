@@ -21,6 +21,7 @@ import localforage from 'localforage';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   demoSnapshot,
+  type LinkPreviewMetadata,
   type WorkspaceResource,
   type WorkspaceSnapshot,
 } from '../domain';
@@ -242,6 +243,14 @@ export async function loadImportedAsset(assetId: string): Promise<Blob | null> {
 
 export async function deleteImportedAsset(assetId: string): Promise<void> {
   await assetCache.removeItem(assetId);
+}
+
+export async function fetchLinkPreview(
+  url: string,
+): Promise<LinkPreviewMetadata> {
+  return (await request(`/links/preview?url=${encodeURIComponent(url)}`, {
+    signal: AbortSignal.timeout(8_000),
+  })) as LinkPreviewMetadata;
 }
 
 export async function getRealtimeToken(): Promise<string> {

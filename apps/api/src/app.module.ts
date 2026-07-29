@@ -10,6 +10,7 @@ import { ResourcesModule } from "./resources/resources.module.js";
 import { InvitesModule } from "./invites/invites.module.js";
 import { SearchModule } from "./search/search.module.js";
 import { AiModule } from "./ai/ai.module.js";
+import { LinksModule } from "./links/links.module.js";
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { AiModule } from "./ai/ai.module.js";
     InvitesModule,
     SearchModule,
     AiModule,
+    LinksModule,
   ],
   controllers: [HealthController],
   providers: [

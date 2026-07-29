@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceResource } from '../domain';
+import { useImportedAssetUrl } from '../lib/use-imported-asset-url';
 import { useCollaboration } from '../lib/use-collaboration';
 import { ShareDialog } from './ShareDialog';
 
@@ -65,6 +66,12 @@ export function NoteEditor({
   const [shareOpen, setShareOpen] = useState(false);
   const { document, status, hydrated } = useCollaboration(resource.id);
   const importedContentApplied = useRef(false);
+  const imageAssetId =
+    resource.imported?.kind === 'file' &&
+    resource.imported.fileType === 'image'
+      ? resource.imported.assetId
+      : null;
+  const imageUrl = useImportedAssetUrl(imageAssetId);
 
   const editor = useEditor(
     {
@@ -165,6 +172,15 @@ export function NoteEditor({
           <i />
           <span>Private note</span>
         </div>
+        {imageAssetId && (
+          <figure className="note-imported-image">
+            {imageUrl ? (
+              <img src={imageUrl} alt={resource.title} />
+            ) : (
+              <span aria-label="Loading image" />
+            )}
+          </figure>
+        )}
         <EditorContent editor={editor} />
       </main>
 

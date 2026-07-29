@@ -2,6 +2,7 @@ import type {
   ImportCandidate,
   ImportedContent,
   ImportedFileType,
+  LinkPreviewMetadata,
   LinkType,
   WorkspaceResource,
 } from '../domain';
@@ -17,6 +18,10 @@ export interface PreparedImport {
 
 const TEXT_FILE_LIMIT = 200_000;
 
+export type LinkPreviewLoader = (
+  url: string,
+) => Promise<LinkPreviewMetadata>;
+
 export function candidatesFromText(raw: string): ImportCandidate[] {
   const text = raw.trim();
   if (!text) return [];
@@ -29,22 +34,50 @@ export function candidatesFromText(raw: string): ImportCandidate[] {
     : [{ kind: 'text', text }];
 }
 
-export async function prepareImport(candidate: ImportCandidate): Promise<PreparedImport> {
-  if (candidate.kind === 'link') return prepareLink(candidate.url);
+export async function prepareImport(
+  candidate: ImportCandidate,
+  loadPreview?: LinkPreviewLoader,
+): Promise<PreparedImport> {
+  if (candidate.kind === 'link') {
+    return prepareLink(candidate.url, loadPreview);
+  }
   if (candidate.kind === 'text') return prepareText(candidate.text);
   return prepareFile(candidate.file);
 }
 
-function prepareLink(rawUrl: string): PreparedImport {
+async function prepareLink(
+  rawUrl: string,
+  loadPreview?: LinkPreviewLoader,
+): Promise<PreparedImport> {
   const url = new URL(rawUrl);
   const linkType = classifyLink(url);
   const host = url.hostname.replace(/^www\./, '');
+  const videoId = linkType === 'youtube' ? youtubeVideoId(url) : null;
+  let metadata: LinkPreviewMetadata | undefined;
+  if (loadPreview) {
+    try {
+      metadata = await loadPreview(url.toString());
+    } catch {
+      metadata = undefined;
+    }
+  }
   return {
-    title: titleForLink(url, linkType),
-    preview: `${labelForLink(linkType)} · ${host}`,
+    title: metadata?.title || titleForLink(url, linkType),
+    preview:
+      metadata?.description || `${labelForLink(linkType)} · ${host}`,
     accent: linkType === 'youtube' ? 'coral' : linkType === 'audio' ? 'mint' : 'blue',
-    size: { width: 330, height: 210 },
-    imported: { kind: 'link', url: url.toString(), host, linkType },
+    size:
+      linkType === 'youtube'
+        ? { width: 384, height: 216 }
+        : { width: 336, height: 240 },
+    imported: {
+      kind: 'link',
+      url: url.toString(),
+      host,
+      linkType,
+      ...(videoId ? { videoId } : {}),
+      ...(metadata ? { metadata } : {}),
+    },
   };
 }
 
@@ -110,6 +143,26 @@ export function classifyLink(url: URL): LinkType {
   if (['medium.com', 'substack.com', 'dev.to', 'habr.com'].some((domain) => host.endsWith(domain))) return 'article';
   if (url.pathname.split('/').filter(Boolean).length >= 2) return 'article';
   return 'website';
+}
+
+export function youtubeVideoId(url: URL): string | null {
+  const host = url.hostname.toLocaleLowerCase().replace(/^www\./, '');
+  let candidate: string | null = null;
+  if (host === 'youtu.be') {
+    candidate = url.pathname.split('/').filter(Boolean)[0] ?? null;
+  } else if (host.endsWith('youtube.com')) {
+    if (url.pathname === '/watch') {
+      candidate = url.searchParams.get('v');
+    } else {
+      const [kind, id] = url.pathname.split('/').filter(Boolean);
+      if (['shorts', 'embed', 'live'].includes(kind ?? '')) {
+        candidate = id ?? null;
+      }
+    }
+  }
+  return candidate && /^[a-zA-Z0-9_-]{6,20}$/.test(candidate)
+    ? candidate
+    : null;
 }
 
 export function classifyFile(file: Pick<File, 'name' | 'type'>): ImportedFileType {

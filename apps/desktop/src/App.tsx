@@ -7,11 +7,13 @@ import {
   useState,
 } from 'react';
 import { AIChat, type AiProposal } from './components/AIChat';
+import { PersistentYoutubePlayer } from './components/PersistentYoutubePlayer';
 import { SpatialHome } from './components/SpatialHome';
 import type {
   ImportCandidate,
   WorkspaceResource,
   WorkspaceSnapshot,
+  YoutubePlayback,
 } from './domain';
 import {
   createResource,
@@ -27,6 +29,7 @@ import {
   updateResource,
 } from './lib/api';
 import { prepareImport } from './lib/imports';
+import { loadLinkPreview } from './lib/link-preview';
 
 type Screen =
   | { kind: 'home' }
@@ -52,6 +55,8 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>({ kind: 'home' });
   const [chatOpen, setChatOpen] = useState(false);
+  const [youtubePlayback, setYoutubePlayback] =
+    useState<YoutubePlayback | null>(null);
 
   useEffect(() => {
     void loadWorkspace().then((next) => {
@@ -126,6 +131,9 @@ export function App() {
       ...state,
       resources: state.resources.filter((resource) => resource.id !== resourceId),
     }));
+    setYoutubePlayback((current) =>
+      current?.resourceId === resourceId ? null : current,
+    );
     if (screen.kind === 'resource' && screen.resourceId === resourceId) {
       setScreen({ kind: 'home' });
     }
@@ -136,7 +144,11 @@ export function App() {
     position: { x: number; y: number },
     folderId: string | null,
   ) {
-    const prepared = await Promise.all(candidates.map(prepareImport));
+    const prepared = await Promise.all(
+      candidates.map((candidate) =>
+        prepareImport(candidate, loadLinkPreview),
+      ),
+    );
     const importedResources: WorkspaceResource[] = [];
     let workingSnapshot = snapshot;
 
@@ -244,6 +256,14 @@ export function App() {
                 loading={loading}
                 folders={snapshot.folders}
                 resources={snapshot.resources}
+                activeYoutubeResourceId={youtubePlayback?.resourceId ?? null}
+                onToggleYoutube={(playback) =>
+                  setYoutubePlayback((current) =>
+                    current?.resourceId === playback.resourceId
+                      ? null
+                      : playback,
+                  )
+                }
                 onOpen={(resourceId) =>
                   setScreen({ kind: 'resource', resourceId })
                 }
@@ -297,6 +317,11 @@ export function App() {
           )}
         </AnimatePresence>
       </motion.main>
+
+      <PersistentYoutubePlayer
+        playback={youtubePlayback}
+        onClose={() => setYoutubePlayback(null)}
+      />
 
       <AIChat
         open={chatOpen}
