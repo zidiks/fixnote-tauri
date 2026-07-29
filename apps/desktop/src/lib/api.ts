@@ -30,6 +30,10 @@ const cache = localforage.createInstance({
   name: 'fixnote',
   storeName: 'workspace',
 });
+const assetCache = localforage.createInstance({
+  name: 'fixnote',
+  storeName: 'assets',
+});
 
 export let supabaseClient: SupabaseClient | null = null;
 if (
@@ -52,6 +56,9 @@ export async function loadWorkspace(): Promise<WorkspaceSnapshot> {
     ]);
     const resources = resourceSummarySchema.array().parse(resourceData);
     const folders = folderSummarySchema.array().parse(folderData);
+    const cachedResources = new Map(
+      cached?.resources.map((resource) => [resource.id, resource]) ?? [],
+    );
     const snapshot: WorkspaceSnapshot = {
       folders,
       resources: resources.map((resource, index) => ({
@@ -63,6 +70,15 @@ export async function loadWorkspace(): Promise<WorkspaceSnapshot> {
         accent: ['paper', 'mint', 'blue', 'coral', 'yellow'][
           index % 5
         ] as WorkspaceResource['accent'],
+        ...(cachedResources.get(resource.id)?.imported
+          ? { imported: cachedResources.get(resource.id)!.imported }
+          : {}),
+        ...(cachedResources.get(resource.id)?.preview
+          ? { preview: cachedResources.get(resource.id)!.preview }
+          : {}),
+        ...(cachedResources.get(resource.id)?.accent
+          ? { accent: cachedResources.get(resource.id)!.accent }
+          : {}),
       })),
     };
     await cache.setItem('snapshot', snapshot);
@@ -214,6 +230,18 @@ export async function saveWorkspace(
   snapshot: WorkspaceSnapshot,
 ): Promise<void> {
   await cache.setItem('snapshot', snapshot);
+}
+
+export async function saveImportedAsset(assetId: string, file: File): Promise<void> {
+  await assetCache.setItem(assetId, file);
+}
+
+export async function loadImportedAsset(assetId: string): Promise<Blob | null> {
+  return assetCache.getItem<Blob>(assetId);
+}
+
+export async function deleteImportedAsset(assetId: string): Promise<void> {
+  await assetCache.removeItem(assetId);
 }
 
 export async function getRealtimeToken(): Promise<string> {

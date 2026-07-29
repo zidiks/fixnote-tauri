@@ -11,10 +11,13 @@ export function useCollaboration(resourceId: string) {
   const document = useMemo(() => new Y.Doc(), [resourceId]);
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [status, setStatus] = useState<ConnectionState>('offline');
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     const name = roomNames.resource(resourceId);
     const persistence = new IndexeddbPersistence(name, document);
+    setHydrated(false);
+    persistence.once('synced', () => setHydrated(true));
     let activeProvider: HocuspocusProvider | null = null;
     let disposed = false;
 
@@ -41,5 +44,5 @@ export function useCollaboration(resourceId: string) {
     };
   }, [document, resourceId]);
 
-  return { document, provider, status };
+  return { document, provider, status, hydrated };
 }

@@ -1,8 +1,54 @@
 import type { FolderSummary, ResourceSummary } from '@fixnote/contracts';
 
+export type LinkType =
+  | 'youtube'
+  | 'video'
+  | 'audio'
+  | 'social'
+  | 'code'
+  | 'document'
+  | 'article'
+  | 'website';
+
+export type ImportedFileType =
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'document'
+  | 'text'
+  | 'archive'
+  | 'file';
+
+export type ImportedContent =
+  | {
+      kind: 'link';
+      url: string;
+      host: string;
+      linkType: LinkType;
+    }
+  | {
+      kind: 'text';
+      text: string;
+    }
+  | {
+      kind: 'file';
+      assetId: string;
+      name: string;
+      mimeType: string;
+      byteLength: number;
+      fileType: ImportedFileType;
+      text?: string;
+    };
+
+export type ImportCandidate =
+  | { kind: 'link'; url: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'file'; file: File };
+
 export interface WorkspaceResource extends ResourceSummary {
   preview: string;
   accent: 'paper' | 'mint' | 'blue' | 'coral' | 'yellow';
+  imported?: ImportedContent;
 }
 
 export interface WorkspaceSnapshot {

@@ -8,18 +8,25 @@ import {
 } from 'react';
 import { AIChat, type AiProposal } from './components/AIChat';
 import { SpatialHome } from './components/SpatialHome';
-import type { WorkspaceResource, WorkspaceSnapshot } from './domain';
+import type {
+  ImportCandidate,
+  WorkspaceResource,
+  WorkspaceSnapshot,
+} from './domain';
 import {
   createResource,
   createFolder,
+  deleteImportedAsset,
   deleteFolder,
   deleteResource,
   loadWorkspace,
   saveWorkspace,
+  saveImportedAsset,
   signOut,
   updateFolder,
   updateResource,
 } from './lib/api';
+import { prepareImport } from './lib/imports';
 
 type Screen =
   | { kind: 'home' }
@@ -111,6 +118,9 @@ export function App() {
       (resource) => resource.id === resourceId,
     );
     if (!current) return;
+    if (current.imported?.kind === 'file') {
+      await deleteImportedAsset(current.imported.assetId);
+    }
     await deleteResource(current, snapshot);
     setSnapshot((state) => ({
       ...state,
@@ -119,6 +129,51 @@ export function App() {
     if (screen.kind === 'resource' && screen.resourceId === resourceId) {
       setScreen({ kind: 'home' });
     }
+  }
+
+  async function importCandidates(
+    candidates: ImportCandidate[],
+    position: { x: number; y: number },
+    folderId: string | null,
+  ) {
+    const prepared = await Promise.all(candidates.map(prepareImport));
+    const importedResources: WorkspaceResource[] = [];
+    let workingSnapshot = snapshot;
+
+    for (const [index, item] of prepared.entries()) {
+      if (item.file && item.imported.kind === 'file') {
+        await saveImportedAsset(item.imported.assetId, item.file);
+      }
+      const resource = await createResource(
+        {
+          kind: 'note',
+          title: item.title,
+          folderId,
+          position: {
+            x: position.x + (index % 3) * 42,
+            y: position.y + Math.floor(index / 3) * 42,
+          },
+          size: item.size,
+        },
+        workingSnapshot,
+      );
+      const importedResource: WorkspaceResource = {
+        ...resource,
+        imported: item.imported,
+        preview: item.preview,
+        accent: item.accent,
+      };
+      importedResources.push(importedResource);
+      workingSnapshot = {
+        ...workingSnapshot,
+        resources: [...workingSnapshot.resources, importedResource],
+      };
+    }
+
+    setSnapshot((current) => ({
+      ...current,
+      resources: [...current.resources, ...importedResources],
+    }));
   }
 
   async function renameFolder(folderId: string, name: string) {
@@ -193,6 +248,7 @@ export function App() {
                   setScreen({ kind: 'resource', resourceId })
                 }
                 onCreate={addResource}
+                onImport={importCandidates}
                 onCreateFolder={addFolder}
                 onPatch={patchResource}
                 onDelete={removeResource}

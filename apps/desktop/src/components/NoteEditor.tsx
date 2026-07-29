@@ -20,7 +20,7 @@ import {
   Strikethrough,
   UnderlineIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceResource } from '../domain';
 import { useCollaboration } from '../lib/use-collaboration';
 import { ShareDialog } from './ShareDialog';
@@ -63,7 +63,8 @@ export function NoteEditor({
   const [title, setTitle] = useState(resource.title);
   const [toolbar, setToolbar] = useState<ToolbarPosition | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
-  const { document, status } = useCollaboration(resource.id);
+  const { document, status, hydrated } = useCollaboration(resource.id);
+  const importedContentApplied = useRef(false);
 
   const editor = useEditor(
     {
@@ -99,6 +100,20 @@ export function NoteEditor({
   );
 
   useEffect(() => setTitle(resource.title), [resource.title]);
+
+  useEffect(() => {
+    if (!editor || !hydrated || importedContentApplied.current || !editor.isEmpty) return;
+    const importedText = textFromImport(resource);
+    if (!importedText) return;
+    importedContentApplied.current = true;
+    editor.commands.setContent({
+      type: 'doc',
+      content: importedText.split(/\r?\n/).map((line) => ({
+        type: 'paragraph',
+        ...(line ? { content: [{ type: 'text', text: line }] } : {}),
+      })),
+    });
+  }, [editor, hydrated, resource]);
 
   function saveTitle() {
     const next = title.trim() || 'Untitled note';
@@ -163,6 +178,14 @@ export function NoteEditor({
       />
     </div>
   );
+}
+
+function textFromImport(resource: WorkspaceResource): string | null {
+  const imported = resource.imported;
+  if (!imported) return null;
+  if (imported.kind === 'text') return imported.text;
+  if (imported.kind === 'link') return imported.url;
+  return imported.text ?? null;
 }
 
 function SelectionToolbar({

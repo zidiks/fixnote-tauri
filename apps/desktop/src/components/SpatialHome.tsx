@@ -1,5 +1,7 @@
 import {
+  type LucideIcon,
   Bot,
+  Code2,
   FileText,
   ArrowUpRight,
   Command,
@@ -7,7 +9,14 @@ import {
   FolderPlus,
   FolderOpen,
   LayoutDashboard,
+  FileArchive,
+  FileImage,
+  FileVideo,
+  Globe2,
+  Image as ImageIcon,
+  Link2,
   LogOut,
+  Music2,
   Pencil,
   Plus,
   Search,
@@ -15,8 +24,12 @@ import {
   Shapes,
   Sparkles,
   Trash2,
+  Upload,
+  Video,
+  Youtube,
 } from 'lucide-react';
 import {
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type WheelEvent,
@@ -30,8 +43,14 @@ import type { FolderSummary, UpdateResourceInput } from '@fixnote/contracts';
 import { roomNames } from '@fixnote/sync';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import * as Y from 'yjs';
-import type { WorkspaceResource } from '../domain';
-import { searchWorkspace } from '../lib/api';
+import type {
+  ImportCandidate,
+  ImportedFileType,
+  LinkType,
+  WorkspaceResource,
+} from '../domain';
+import { loadImportedAsset, searchWorkspace } from '../lib/api';
+import { candidatesFromText } from '../lib/imports';
 
 interface SpatialHomeProps {
   loading: boolean;
@@ -42,6 +61,11 @@ interface SpatialHomeProps {
     kind: WorkspaceResource['kind'],
     title?: string,
   ) => Promise<WorkspaceResource>;
+  onImport: (
+    candidates: ImportCandidate[],
+    position: WorkspaceResource['position'],
+    folderId: string | null,
+  ) => Promise<void>;
   onPatch: (resourceId: string, patch: UpdateResourceInput) => Promise<void>;
   onDelete: (resourceId: string) => Promise<void>;
   onRenameFolder: (folderId: string, name: string) => Promise<void>;
@@ -134,6 +158,7 @@ export function SpatialHome({
   resources,
   onOpen,
   onCreate,
+  onImport,
   onPatch,
   onDelete,
   onRenameFolder,
@@ -174,6 +199,13 @@ export function SpatialHome({
   const [homeDropActive, setHomeDropActive] = useState(false);
   const homeDropRef = useRef<HTMLDivElement>(null);
   const centeredScopeRef = useRef<string | null>(null);
+  const externalDragDepthRef = useRef(0);
+  const [externalDragActive, setExternalDragActive] = useState(false);
+  const [importMessage, setImportMessage] = useState<{
+    tone: 'success' | 'error' | 'progress';
+    text: string;
+  } | null>(null);
+  const importMessageTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -196,6 +228,15 @@ export function SpatialHome({
     );
   }, [folderPositions]);
 
+  useEffect(
+    () => () => {
+      if (importMessageTimerRef.current) {
+        window.clearTimeout(importMessageTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     const normalized = query.trim();
     if (!normalized) {
@@ -211,6 +252,30 @@ export function SpatialHome({
     }, 220);
     return () => window.clearTimeout(timeout);
   }, [query]);
+
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      const clipboard = event.clipboardData;
+      if (!clipboard) return;
+      const files = Array.from(clipboard.files);
+      const candidates: ImportCandidate[] = files.length
+        ? files.map((file) => ({ kind: 'file', file }))
+        : candidatesFromText(clipboard.getData('text/plain'));
+      if (!candidates.length) return;
+      event.preventDefault();
+      const viewport = viewportRef.current?.getBoundingClientRect();
+      if (!viewport) return;
+      const position = clientToWorld(
+        viewport.left + viewport.width / 2,
+        viewport.top + viewport.height / 2,
+      );
+      void runImport(candidates, position, activeFolder);
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [activeFolder, camera, onImport]);
 
   const visibleResources = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -360,6 +425,84 @@ export function SpatialHome({
     return folder?.id ?? null;
   }
 
+  function clientToWorld(clientX: number, clientY: number) {
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    if (!viewport) return { x: 0, y: 0 };
+    return {
+      x: snap((clientX - viewport.left - camera.x) / camera.scale),
+      y: snap((clientY - viewport.top - camera.y) / camera.scale),
+    };
+  }
+
+  function beginExternalDrop(event: ReactDragEvent<HTMLDivElement>) {
+    if (!hasImportableData(event.dataTransfer)) return;
+    event.preventDefault();
+    externalDragDepthRef.current += 1;
+    setExternalDragActive(true);
+  }
+
+  function continueExternalDrop(event: ReactDragEvent<HTMLDivElement>) {
+    if (!hasImportableData(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setExternalDragActive(true);
+    const position = clientToWorld(event.clientX, event.clientY);
+    setDropTargetId(dropFolderFor(position, { width: 320, height: 220 }));
+  }
+
+  function leaveExternalDrop(event: ReactDragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    externalDragDepthRef.current = Math.max(0, externalDragDepthRef.current - 1);
+    if (externalDragDepthRef.current === 0) {
+      setExternalDragActive(false);
+      setDropTargetId(null);
+    }
+  }
+
+  function finishExternalDrop(event: ReactDragEvent<HTMLDivElement>) {
+    if (!hasImportableData(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    externalDragDepthRef.current = 0;
+    setExternalDragActive(false);
+    setDropTargetId(null);
+    const candidates = candidatesFromTransfer(event.dataTransfer);
+    if (!candidates.length) return;
+    const position = clientToWorld(event.clientX, event.clientY);
+    const folderId = dropFolderFor(position, { width: 320, height: 220 }) ?? activeFolder;
+    void runImport(candidates, position, folderId);
+  }
+
+  async function runImport(
+    candidates: ImportCandidate[],
+    position: WorkspaceResource['position'],
+    folderId: string | null,
+  ) {
+    if (importMessageTimerRef.current) {
+      window.clearTimeout(importMessageTimerRef.current);
+    }
+    setImportMessage({
+      tone: 'progress',
+      text: `Adding ${candidates.length === 1 ? 'item' : `${candidates.length} items`}…`,
+    });
+    try {
+      await onImport(candidates, position, folderId);
+      setImportMessage({
+        tone: 'success',
+        text: candidates.length === 1 ? 'Added to FixNote' : `${candidates.length} items added`,
+      });
+    } catch {
+      setImportMessage({
+        tone: 'error',
+        text: 'Could not add this item',
+      });
+    }
+    importMessageTimerRef.current = window.setTimeout(
+      () => setImportMessage(null),
+      2600,
+    );
+  }
+
   function isOverHomeDropzone(clientX: number, clientY: number) {
     const bounds = homeDropRef.current?.getBoundingClientRect();
     return !!bounds && clientX >= bounds.left && clientX <= bounds.right && clientY >= bounds.top && clientY <= bounds.bottom;
@@ -450,6 +593,10 @@ export function SpatialHome({
         onPointerUp={endPan}
         onPointerCancel={endPan}
         onWheel={zoom}
+        onDragEnter={beginExternalDrop}
+        onDragOver={continueExternalDrop}
+        onDragLeave={leaveExternalDrop}
+        onDrop={finishExternalDrop}
       >
         <div
           className="spatial-world"
@@ -554,7 +701,22 @@ export function SpatialHome({
             <span>Try another search or create a note.</span>
           </div>
         )}
+
+        {externalDragActive && (
+          <div className="external-drop-overlay">
+            <span><Upload size={24} /></span>
+            <strong>Drop to add to FixNote</strong>
+            <small>Links, text, documents, images and video</small>
+          </div>
+        )}
       </div>
+
+      {importMessage && (
+        <div className={`import-toast is-${importMessage.tone}`} role="status">
+          {importMessage.tone === 'progress' ? <Upload size={14} /> : <span />}
+          {importMessage.text}
+        </div>
+      )}
 
       {contextMenu && (
         <ResourceContextMenu
@@ -791,7 +953,7 @@ function ResourceCard({
 
   return (
     <article
-      className={`resource-card accent-${resource.accent}${resource.kind === 'note' ? ' is-note' : ''}${dragging ? ' is-dragging' : ''}`}
+      className={`resource-card accent-${resource.accent}${resource.kind === 'note' && !resource.imported ? ' is-note' : ''}${resource.imported ? ` is-imported imported-${resource.imported.kind}` : ''}${dragging ? ' is-dragging' : ''}`}
       style={{
         left: position.x,
         top: position.y,
@@ -808,7 +970,9 @@ function ResourceCard({
         onOpenMenu(event.clientX, event.clientY);
       }}
     >
-      {resource.kind === 'note' ? (
+      {resource.imported ? (
+        <ImportedPreview resource={resource} />
+      ) : resource.kind === 'note' ? (
         <NotePreview resource={resource} />
       ) : (
         <>
@@ -842,6 +1006,114 @@ function ResourceCard({
       />
     </article>
   );
+}
+
+function ImportedPreview({ resource }: { resource: WorkspaceResource }) {
+  const imported = resource.imported!;
+  const assetUrl = useImportedAssetUrl(
+    imported.kind === 'file' ? imported.assetId : null,
+  );
+
+  if (imported.kind === 'text') {
+    return (
+      <div className="imported-preview imported-text-preview">
+        <ImportBadge icon={FileText} label="Pasted text" />
+        <h2>{resource.title}</h2>
+        <p>{resource.preview}</p>
+      </div>
+    );
+  }
+
+  if (imported.kind === 'link') {
+    const linkMeta = linkPresentation(imported.linkType);
+    return (
+      <div className={`imported-preview link-preview link-${imported.linkType}`}>
+        <ImportBadge icon={linkMeta.icon} label={linkMeta.label} />
+        <div className="link-preview-visual">
+          <linkMeta.icon size={30} strokeWidth={1.7} />
+          {imported.linkType === 'youtube' && <span className="link-play">▶</span>}
+        </div>
+        <h2>{resource.title}</h2>
+        <p>{imported.host}</p>
+        <ArrowUpRight className="import-open-mark" size={16} />
+      </div>
+    );
+  }
+
+  const fileMeta = filePresentation(imported.fileType);
+  return (
+    <div className={`imported-preview file-preview file-${imported.fileType}`}>
+      <ImportBadge icon={fileMeta.icon} label={fileMeta.label} />
+      {imported.fileType === 'image' && assetUrl ? (
+        <img src={assetUrl} alt="" draggable={false} />
+      ) : imported.fileType === 'video' && assetUrl ? (
+        <video src={assetUrl} muted preload="metadata" />
+      ) : (
+        <div className="file-preview-icon">
+          <fileMeta.icon size={34} strokeWidth={1.45} />
+        </div>
+      )}
+      <h2>{resource.title}</h2>
+      <p>{resource.preview}</p>
+    </div>
+  );
+}
+
+function ImportBadge({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span className="import-badge">
+      <Icon size={12} strokeWidth={1.8} /> {label}
+    </span>
+  );
+}
+
+function useImportedAssetUrl(assetId: string | null) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let objectUrl: string | null = null;
+    if (!assetId) {
+      setUrl(null);
+      return;
+    }
+    void loadImportedAsset(assetId).then((blob) => {
+      if (!blob || disposed) return;
+      objectUrl = URL.createObjectURL(blob);
+      setUrl(objectUrl);
+    });
+    return () => {
+      disposed = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [assetId]);
+
+  return url;
+}
+
+function linkPresentation(type: LinkType): { icon: LucideIcon; label: string } {
+  return {
+    youtube: { icon: Youtube, label: 'YouTube' },
+    video: { icon: Video, label: 'Video link' },
+    audio: { icon: Music2, label: 'Audio link' },
+    social: { icon: Link2, label: 'Social post' },
+    code: { icon: Code2, label: 'Code' },
+    document: { icon: FileText, label: 'Document link' },
+    article: { icon: FileText, label: 'Article' },
+    website: { icon: Globe2, label: 'Website' },
+  }[type];
+}
+
+function filePresentation(type: ImportedFileType): { icon: LucideIcon; label: string } {
+  return {
+    image: { icon: ImageIcon, label: 'Image' },
+    video: { icon: FileVideo, label: 'Video' },
+    audio: { icon: Music2, label: 'Audio' },
+    document: { icon: FileText, label: 'Document' },
+    text: { icon: FileText, label: 'Text file' },
+    archive: { icon: FileArchive, label: 'Archive' },
+    file: { icon: FileImage, label: 'File' },
+  }[type];
 }
 
 function NotePreview({ resource }: { resource: WorkspaceResource }) {
@@ -1159,6 +1431,34 @@ function FolderStack({
 
 function snap(value: number) {
   return Math.round(value / SNAP) * SNAP;
+}
+
+function candidatesFromTransfer(dataTransfer: DataTransfer): ImportCandidate[] {
+  const files = Array.from(dataTransfer.files);
+  if (files.length) return files.map((file) => ({ kind: 'file', file }));
+
+  const uriList = dataTransfer
+    .getData('text/uri-list')
+    .split(/\r?\n/)
+    .filter((line) => line && !line.startsWith('#'))
+    .join('\n');
+  return candidatesFromText(uriList || dataTransfer.getData('text/plain'));
+}
+
+function hasImportableData(dataTransfer: DataTransfer): boolean {
+  return (
+    dataTransfer.files.length > 0 ||
+    dataTransfer.types.includes('Files') ||
+    dataTransfer.types.includes('text/plain') ||
+    dataTransfer.types.includes('text/uri-list')
+  );
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    !!target.closest('input, textarea, [contenteditable="true"]')
+  );
 }
 
 function clamp(value: number, min: number, max: number) {
