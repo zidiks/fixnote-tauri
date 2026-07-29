@@ -1,0 +1,287 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum ResourceKind {
+  NOTE
+  BOARD
+}
+
+enum CollaboratorRole {
+  EDITOR
+  VIEWER
+}
+
+enum AiThreadScope {
+  GLOBAL
+  RESOURCE
+}
+
+enum ProposalStatus {
+  PENDING
+  APPLIED
+  REJECTED
+  EXPIRED
+}
+
+enum IngestionKind {
+  URL
+  YOUTUBE
+  VOICE
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Profile {
+  id                 String    @id @db.Uuid
+  email              String?   @unique
+  displayName        String?
+  homeWrappedDek     Bytes?
+  homeKeyVersion     Int?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  ownedResources     Resource[] @relation("resource_owner")
+  ownedFolders       Folder[]   @relation("folder_owner")
+  collaborations     ResourceAcl[]
+  invitesCreated     Invite[]   @relation("invite_creator")
+  aiThreads          AiThread[]
+  ingestionJobs      IngestionJob[]
+  encryptedYjsStates EncryptedYjsState[]
+
+  @@map("profiles")
+}
+
+model Folder {
+  id             String    @id @default(uuid()) @db.Uuid
+  ownerId        String    @db.Uuid
+  parentId       String?   @db.Uuid
+  nameCiphertext Bytes
+  wrappedDek     Bytes
+  keyVersion     Int
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  owner          Profile   @relation("folder_owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  parent         Folder?   @relation("folder_tree", fields: [parentId], references: [id], onDelete: SetNull)
+  children       Folder[]  @relation("folder_tree")
+  resources      Resource[]
+
+  @@index([ownerId, parentId])
+  @@index([parentId])
+  @@index([ownerId, deletedAt])
+  @@map("folders")
+}
+
+model Resource {
+  id              String          @id @default(uuid()) @db.Uuid
+  ownerId         String          @db.Uuid
+  folderId        String?         @db.Uuid
+  kind            ResourceKind
+  titleCiphertext Bytes
+  titleHash       String
+  schemaVersion   Int             @default(1)
+  positionX       Float           @default(0)
+  positionY       Float           @default(0)
+  width           Float           @default(320)
+  height          Float           @default(220)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  deletedAt       DateTime?
+  owner           Profile         @relation("resource_owner", fields: [ownerId], references: [id], onDelete: Cascade)
+  folder          Folder?         @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  key             ResourceKey?
+  collaborators   ResourceAcl[]
+  invites         Invite[]
+  state           EncryptedYjsState?
+  assets          Asset[]
+  searchChunks    SearchChunk[]
+  aiThreads       AiThread[]
+  ingestionJobs   IngestionJob[]
+
+  @@index([ownerId, folderId, updatedAt])
+  @@index([folderId])
+  @@index([ownerId, deletedAt])
+  @@map("resources")
+}
+
+model ResourceKey {
+  resourceId String   @id @db.Uuid
+  wrappedDek Bytes
+  keyVersion Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@map("resource_keys")
+}
+
+model ResourceAcl {
+  resourceId String           @db.Uuid
+  userId     String           @db.Uuid
+  role       CollaboratorRole
+  acceptedAt DateTime         @default(now())
+  revokedAt  DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  resource   Resource         @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  user       Profile          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([resourceId, userId])
+  @@index([userId, revokedAt, updatedAt])
+  @@map("resource_acl")
+}
+
+model Invite {
+  id              String           @id @default(uuid()) @db.Uuid
+  resourceId      String           @db.Uuid
+  createdById     String           @db.Uuid
+  emailHash       String
+  emailCiphertext Bytes
+  tokenHash       String           @unique
+  role            CollaboratorRole
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime         @default(now())
+  resource        Resource         @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  createdBy       Profile          @relation("invite_creator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([resourceId, revokedAt])
+  @@index([createdById])
+  @@index([emailHash, expiresAt])
+  @@map("invites")
+}
+
+model EncryptedYjsState {
+  documentName String   @id
+  resourceId   String?  @unique @db.Uuid
+  ownerId      String?  @db.Uuid
+  ciphertext   Bytes
+  stateVector  Bytes?
+  schemaVersion Int     @default(1)
+  revision     Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  resource     Resource? @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  owner        Profile?  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, updatedAt])
+  @@map("encrypted_yjs_states")
+}
+
+model Asset {
+  id                 String   @id @default(uuid()) @db.Uuid
+  resourceId         String   @db.Uuid
+  objectKey          String   @unique
+  mimeType           String
+  byteLength         BigInt
+  metadataCiphertext Bytes?
+  wrappedDek         Bytes
+  keyVersion         Int
+  createdAt          DateTime @default(now())
+  deletedAt          DateTime?
+  resource           Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId, deletedAt])
+  @@map("assets")
+}
+
+model SearchChunk {
+  id             String   @id @default(uuid()) @db.Uuid
+  resourceId     String   @db.Uuid
+  nodeId         String?
+  kind           String
+  language       String   @default("simple")
+  contentHash    String
+  contentCiphertext Bytes
+  projectionVersion Int  @default(1)
+  searchVector   Unsupported("tsvector")?
+  embedding      Unsupported("vector(768)")?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  resource       Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId, updatedAt])
+  @@map("search_chunks")
+}
+
+model AiThread {
+  id         String        @id @default(uuid()) @db.Uuid
+  ownerId    String        @db.Uuid
+  resourceId String?       @db.Uuid
+  scope      AiThreadScope
+  titleCiphertext Bytes?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  owner      Profile       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  resource   Resource?     @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  messages   AiMessage[]
+  proposals  AiProposal[]
+
+  @@index([ownerId, scope, updatedAt])
+  @@index([resourceId, updatedAt])
+  @@map("ai_threads")
+}
+
+model AiMessage {
+  id                String   @id @default(uuid()) @db.Uuid
+  threadId          String   @db.Uuid
+  role              String
+  contentCiphertext Bytes
+  citationsCiphertext Bytes?
+  createdAt         DateTime @default(now())
+  thread            AiThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("ai_messages")
+}
+
+model AiProposal {
+  id                String         @id @default(uuid()) @db.Uuid
+  threadId          String         @db.Uuid
+  actionType        String
+  payloadCiphertext Bytes
+  status            ProposalStatus @default(PENDING)
+  expiresAt         DateTime?
+  createdAt         DateTime       @default(now())
+  decidedAt         DateTime?
+  thread            AiThread       @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, status, createdAt])
+  @@map("ai_proposals")
+}
+
+model IngestionJob {
+  id                String        @id @default(uuid()) @db.Uuid
+  ownerId           String        @db.Uuid
+  resourceId        String?       @db.Uuid
+  kind              IngestionKind
+  status            JobStatus     @default(QUEUED)
+  inputCiphertext   Bytes
+  resultCiphertext  Bytes?
+  errorCode         String?
+  attempts          Int           @default(0)
+  idempotencyKey    String
+  createdAt         DateTime      @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  owner             Profile       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  resource          Resource?     @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
+  @@unique([ownerId, idempotencyKey])
+  @@index([status, createdAt])
+  @@index([ownerId, createdAt])
+  @@index([resourceId])
+  @@map("ingestion_jobs")
+}

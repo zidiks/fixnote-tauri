@@ -1,0 +1,23 @@
+{
+  "name": "fixnote",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.8.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm build:packages && pnpm --parallel --filter @fixnote/api --filter @fixnote/realtime --filter @fixnote/desktop dev",
+    "build:packages": "pnpm --filter @fixnote/contracts --filter @fixnote/crypto --filter @fixnote/database --filter @fixnote/sync build",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm build:packages && pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "db:generate": "pnpm --filter @fixnote/database run generate",
+    "db:migrate": "pnpm --filter @fixnote/database run migrate",
+    "db:deploy": "pnpm --filter @fixnote/database run deploy",
+    "desktop:tauri": "pnpm --filter @fixnote/desktop tauri",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "doctor": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/doctor.ps1"
+  }
+}

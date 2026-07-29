@@ -1,0 +1,45 @@
+{
+  "name": "@fixnote/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fixnote/contracts": "workspace:*",
+    "@fixnote/sync": "workspace:*",
+    "@hocuspocus/provider": "^3.4.4",
+    "@supabase/supabase-js": "^2.52.0",
+    "@tauri-apps/api": "^2.5.0",
+    "@tiptap/core": "^3.0.0",
+    "@tiptap/extension-collaboration": "^3.0.0",
+    "@tiptap/extension-link": "^3.0.0",
+    "@tiptap/extension-placeholder": "^3.0.0",
+    "@tiptap/extension-underline": "^3.0.0",
+    "@tiptap/react": "^3.0.0",
+    "@tiptap/starter-kit": "^3.0.0",
+    "framer-motion": "^12.23.0",
+    "konva": "^9.3.20",
+    "localforage": "^1.10.0",
+    "lucide-react": "^0.525.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-konva": "^19.0.10",
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.27"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.11",
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.4"
+  }
+}
