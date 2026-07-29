@@ -2,12 +2,14 @@ import {
   aiChatRequestSchema,
   aiChatResponseSchema,
   createResourceSchema,
+  createFolderSchema,
   folderSummarySchema,
   inviteCollaboratorSchema,
   resourceSummarySchema,
   searchResultSchema,
   shareEntrySchema,
   type CreateResourceInput,
+  type CreateFolderInput,
   type AiChatResponse,
   type FolderSummary,
   type InviteCollaboratorInput,
@@ -136,6 +138,78 @@ export async function updateResource(
   }
 }
 
+export async function deleteResource(
+  resource: WorkspaceResource,
+  snapshot: WorkspaceSnapshot,
+): Promise<void> {
+  try {
+    await request(`/resources/${resource.id}`, { method: 'DELETE' });
+  } catch {
+    await saveWorkspace({
+      ...snapshot,
+      resources: snapshot.resources.filter((item) => item.id !== resource.id),
+    });
+  }
+}
+
+export async function updateFolder(
+  folder: FolderSummary,
+  input: { name?: string; parentId?: string | null; position?: { x: number; y: number } },
+): Promise<FolderSummary> {
+  const optimistic = { ...folder, ...input, updatedAt: new Date().toISOString() };
+  try {
+    return folderSummarySchema.parse(
+      await request(`/folders/${folder.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(input),
+      }),
+    );
+  } catch {
+    return optimistic;
+  }
+}
+
+export async function createFolder(
+  input: CreateFolderInput,
+  snapshot: WorkspaceSnapshot,
+): Promise<FolderSummary> {
+  const parsed = createFolderSchema.parse(input);
+  try {
+    return folderSummarySchema.parse(
+      await request('/folders', { method: 'POST', body: JSON.stringify(parsed) }),
+    );
+  } catch {
+    const now = new Date().toISOString();
+    const folder: FolderSummary = {
+      id: parsed.id ?? crypto.randomUUID(),
+      ownerId: import.meta.env.VITE_MOCK_USER_ID ?? '00000000-0000-4000-8000-000000000001',
+      name: parsed.name,
+      parentId: parsed.parentId ?? null,
+      position: parsed.position ?? { x: 180, y: 420 },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await saveWorkspace({ ...snapshot, folders: [...snapshot.folders, folder] });
+    return folder;
+  }
+}
+
+export async function deleteFolder(
+  folderId: string,
+  snapshot: WorkspaceSnapshot,
+): Promise<void> {
+  try {
+    await request(`/folders/${folderId}`, { method: 'DELETE' });
+  } catch {
+    await saveWorkspace({
+      folders: snapshot.folders.filter((folder) => folder.id !== folderId),
+      resources: snapshot.resources.map((resource) =>
+        resource.folderId === folderId ? { ...resource, folderId: null } : resource,
+      ),
+    });
+  }
+}
+
 export async function saveWorkspace(
   snapshot: WorkspaceSnapshot,
 ): Promise<void> {
@@ -153,6 +227,10 @@ export async function getRealtimeToken(): Promise<string> {
     data: { session },
   } = await supabaseClient.auth.getSession();
   return session?.access_token ?? '';
+}
+
+export async function signOut(): Promise<void> {
+  if (supabaseClient) await supabaseClient.auth.signOut();
 }
 
 export async function listSharing(resourceId: string): Promise<ShareEntry[]> {

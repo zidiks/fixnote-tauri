@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type {
   AiChatRequest,
   AiChatResponse,
@@ -8,7 +8,7 @@ import { SearchService } from '../search/search.service.js';
 
 @Injectable()
 export class AiService {
-  constructor(private readonly search: SearchService) {}
+  constructor(@Inject(SearchService) private readonly search: SearchService) {}
 
   async chat(
     user: AuthenticatedUser,

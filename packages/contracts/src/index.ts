@@ -83,14 +83,27 @@ export const createFolderSchema = z.object({
   id: z.string().uuid().optional(),
   name: z.string().trim().min(1).max(120),
   parentId: z.string().uuid().nullable().optional(),
+  position: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
 });
 export type CreateFolderInput = z.infer<typeof createFolderSchema>;
+
+export const updateFolderSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    parentId: z.string().uuid().nullable().optional(),
+    position: z.object({ x: z.number().finite(), y: z.number().finite() }).optional(),
+  })
+  .refine((value) => value.name !== undefined || value.parentId !== undefined || value.position !== undefined, {
+    message: 'At least one field must be provided',
+  });
+export type UpdateFolderInput = z.infer<typeof updateFolderSchema>;
 
 export const folderSummarySchema = z.object({
   id: z.string().uuid(),
   ownerId: z.string().uuid(),
   name: z.string(),
   parentId: z.string().uuid().nullable(),
+  position: z.object({ x: z.number(), y: z.number() }),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

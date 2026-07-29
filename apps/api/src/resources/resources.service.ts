@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -32,8 +33,8 @@ type ResourceWithAccess = Prisma.ResourceGetPayload<{
 @Injectable()
 export class ResourcesService {
   constructor(
-    private readonly crypto: CryptoService,
-    private readonly profiles: ProfilesService,
+    @Inject(CryptoService) private readonly crypto: CryptoService,
+    @Inject(ProfilesService) private readonly profiles: ProfilesService,
   ) {}
 
   async list(

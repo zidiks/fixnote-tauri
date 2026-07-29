@@ -1,25 +1,35 @@
 import {
   Bot,
+  FileText,
+  ArrowUpRight,
   Command,
-  FilePlus2,
   Folder,
+  FolderPlus,
   FolderOpen,
   LayoutDashboard,
+  LogOut,
+  Pencil,
   Plus,
   Search,
   Settings2,
   Shapes,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import {
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type WheelEvent,
   useMemo,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
 import type { FolderSummary, UpdateResourceInput } from '@fixnote/contracts';
+import { roomNames } from '@fixnote/sync';
+import { IndexeddbPersistence } from 'y-indexeddb';
+import * as Y from 'yjs';
 import type { WorkspaceResource } from '../domain';
 import { searchWorkspace } from '../lib/api';
 
@@ -33,7 +43,13 @@ interface SpatialHomeProps {
     title?: string,
   ) => Promise<WorkspaceResource>;
   onPatch: (resourceId: string, patch: UpdateResourceInput) => Promise<void>;
+  onDelete: (resourceId: string) => Promise<void>;
+  onRenameFolder: (folderId: string, name: string) => Promise<void>;
+  onDeleteFolder: (folderId: string) => Promise<void>;
+  onMoveFolder: (folderId: string, parentId: string | null, position: WorkspaceResource['position']) => Promise<void>;
+  onCreateFolder: (name: string, parentId: string | null, position: WorkspaceResource['position']) => Promise<void>;
   onOpenChat: () => void;
+  onSignOut: () => Promise<void>;
 }
 
 interface Camera {
@@ -43,11 +59,74 @@ interface Camera {
 }
 
 const SNAP = 24;
-const folderPositions = [
+const FOLDER_POSITION_STORAGE_KEY = 'fixnote:folder-positions';
+const defaultFolderPositions = [
   { x: -160, y: 520 },
   { x: 260, y: 560 },
   { x: 720, y: 520 },
 ];
+
+type FolderPositions = Record<string, WorkspaceResource['position']>;
+
+function defaultFolderPosition(index: number): WorkspaceResource['position'] {
+  return (
+    defaultFolderPositions[index] ?? {
+      x: 1140 + (index - 3) * 340,
+      y: 540,
+    }
+  );
+}
+
+function folderPosition(folder: FolderSummary, index: number, local: FolderPositions) {
+  return folder.position.x !== 0 || folder.position.y !== 0
+    ? folder.position
+    : local[folder.id] ?? defaultFolderPosition(index);
+}
+
+interface ResourceContextMenuState {
+  resource: WorkspaceResource;
+  x: number;
+  y: number;
+}
+
+interface FolderContextMenuState {
+  folder: FolderSummary;
+  x: number;
+  y: number;
+}
+
+function loadFolderPositions(): FolderPositions {
+  try {
+    const stored = window.localStorage.getItem(FOLDER_POSITION_STORAGE_KEY);
+    if (!stored) return {};
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([id, value]) => {
+        if (
+          !value ||
+          typeof value !== 'object' ||
+          !Number.isFinite((value as { x?: unknown }).x) ||
+          !Number.isFinite((value as { y?: unknown }).y)
+        ) {
+          return [];
+        }
+        return [
+          [
+            id,
+            {
+              x: (value as { x: number }).x,
+              y: (value as { y: number }).y,
+            },
+          ],
+        ];
+      }),
+    );
+  } catch {
+    return {};
+  }
+}
 
 export function SpatialHome({
   loading,
@@ -56,7 +135,13 @@ export function SpatialHome({
   onOpen,
   onCreate,
   onPatch,
+  onDelete,
+  onRenameFolder,
+  onDeleteFolder,
+  onMoveFolder,
+  onCreateFolder,
   onOpenChat,
+  onSignOut,
 }: SpatialHomeProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const panRef = useRef<{
@@ -74,6 +159,42 @@ export function SpatialHome({
   const [query, setQuery] = useState('');
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [semanticIds, setSemanticIds] = useState<Set<string>>(new Set());
+  const [folderPositions, setFolderPositions] =
+    useState<FolderPositions>(loadFolderPositions);
+  const [contextMenu, setContextMenu] =
+    useState<ResourceContextMenuState | null>(null);
+  const [folderContextMenu, setFolderContextMenu] =
+    useState<FolderContextMenuState | null>(null);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [folderDropTargetId, setFolderDropTargetId] = useState<string | null>(null);
+  const [draggingResource, setDraggingResource] = useState(false);
+  const [draggingFolder, setDraggingFolder] = useState(false);
+  const [homeDropActive, setHomeDropActive] = useState(false);
+  const homeDropRef = useRef<HTMLDivElement>(null);
+  const centeredScopeRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+
+    const preventNativeZoom = (event: globalThis.WheelEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+      }
+    };
+
+    viewport.addEventListener('wheel', preventNativeZoom, { passive: false });
+    return () => viewport.removeEventListener('wheel', preventNativeZoom);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      FOLDER_POSITION_STORAGE_KEY,
+      JSON.stringify(folderPositions),
+    );
+  }, [folderPositions]);
 
   useEffect(() => {
     const normalized = query.trim();
@@ -96,7 +217,9 @@ export function SpatialHome({
     return resources.filter((resource) => {
       const inFolder = activeFolder
         ? resource.folderId === activeFolder
-        : true;
+        : normalized
+          ? true
+          : resource.folderId === null;
       const matches =
         !normalized ||
         semanticIds.has(resource.id) ||
@@ -107,7 +230,50 @@ export function SpatialHome({
     });
   }, [activeFolder, query, resources, semanticIds]);
 
+  const visibleFolders = useMemo(
+    () => folders.filter((folder) => folder.parentId === activeFolder),
+    [activeFolder, folders],
+  );
+
+  useLayoutEffect(() => {
+    if (loading) return;
+    const scope = activeFolder ?? 'home';
+    if (centeredScopeRef.current === scope) return;
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    if (!viewport) return;
+    const items = [
+      ...visibleResources.map((resource) => ({
+        x: resource.position.x,
+        y: resource.position.y,
+        width: resource.size.width,
+        height: resource.size.height,
+      })),
+      ...visibleFolders.map((folder) => {
+        const index = folders.findIndex((item) => item.id === folder.id);
+        const position = folderPosition(folder, index, folderPositions);
+        return { ...position, width: 300, height: 176 };
+      }),
+    ];
+    if (!items.length) return;
+    const minX = Math.min(...items.map((item) => item.x));
+    const maxX = Math.max(...items.map((item) => item.x + item.width));
+    const minY = Math.min(...items.map((item) => item.y));
+    const maxY = Math.max(...items.map((item) => item.y + item.height));
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    setCamera((current) => ({
+      ...current,
+      x: viewport.width / 2 - centerX * current.scale,
+      y: viewport.height / 2 - centerY * current.scale,
+    }));
+    centeredScopeRef.current = scope;
+  }, [activeFolder, folderPositions, folders, loading, visibleFolders, visibleResources]);
+
   function beginPan(event: ReactPointerEvent<HTMLDivElement>) {
+    setContextMenu(null);
+    setFolderContextMenu(null);
+    setCreateMenuOpen(false);
+    setProfileMenuOpen(false);
     if (event.button !== 0) return;
     const target = event.target;
     if (
@@ -146,7 +312,8 @@ export function SpatialHome({
 
   function zoom(event: WheelEvent<HTMLDivElement>) {
     event.preventDefault();
-    if (!event.ctrlKey && !event.metaKey) {
+    const isZoomGesture = event.altKey || event.ctrlKey || event.metaKey;
+    if (!isZoomGesture) {
       const horizontalDelta =
         event.shiftKey && Math.abs(event.deltaX) < Math.abs(event.deltaY)
           ? event.deltaY
@@ -181,14 +348,30 @@ export function SpatialHome({
       x: position.x + size.width / 2,
       y: position.y + size.height / 2,
     };
-    const index = folderPositions.findIndex(
-      (folder) =>
-        center.x >= folder.x &&
-        center.x <= folder.x + 300 &&
-        center.y >= folder.y &&
-        center.y <= folder.y + 176,
-    );
-    return folders[index]?.id;
+    const folder = visibleFolders.find((entry, index) => {
+      const targetPosition = folderPosition(entry, index, folderPositions);
+      return (
+        center.x >= targetPosition.x &&
+        center.x <= targetPosition.x + 300 &&
+        center.y >= targetPosition.y &&
+        center.y <= targetPosition.y + 176
+      );
+    });
+    return folder?.id ?? null;
+  }
+
+  function isOverHomeDropzone(clientX: number, clientY: number) {
+    const bounds = homeDropRef.current?.getBoundingClientRect();
+    return !!bounds && clientX >= bounds.left && clientX <= bounds.right && clientY >= bounds.top && clientY <= bounds.bottom;
+  }
+
+  function folderDropTargetFor(folderId: string, position: WorkspaceResource['position']) {
+    const center = { x: position.x + 150, y: position.y + 88 };
+    return visibleFolders.find((candidate, index) => {
+      if (candidate.id === folderId) return false;
+      const target = folderPosition(candidate, index, folderPositions);
+      return center.x >= target.x && center.x <= target.x + 300 && center.y >= target.y && center.y <= target.y + 176;
+    })?.id ?? null;
   }
 
   return (
@@ -213,9 +396,30 @@ export function SpatialHome({
           <button className="soft-button" onClick={onOpenChat}>
             <Sparkles size={15} /> Ask AI
           </button>
-          <button className="avatar-button" aria-label="Profile">
-            Z
-          </button>
+          <div className="profile-menu-wrap">
+            <button
+              className="avatar-button"
+              aria-label="Profile"
+              aria-expanded={profileMenuOpen}
+              onClick={() => setProfileMenuOpen((current) => !current)}
+            >
+              Z
+            </button>
+            {profileMenuOpen && (
+              <div className="profile-menu" role="menu">
+                <span>FixNote profile</span>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    void onSignOut();
+                  }}
+                >
+                  <LogOut size={15} /> Log out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -226,6 +430,15 @@ export function SpatialHome({
           <strong>
             {folders.find((folder) => folder.id === activeFolder)?.name}
           </strong>
+        </div>
+      )}
+
+      {activeFolder && (draggingResource || draggingFolder) && (
+        <div
+          ref={homeDropRef}
+          className={`folder-home-dropzone${homeDropActive ? ' is-active' : ''}`}
+        >
+          Drop here to move to home
         </div>
       )}
 
@@ -253,50 +466,88 @@ export function SpatialHome({
                 resource={resource}
                 scale={camera.scale}
                 onOpen={() => onOpen(resource.id)}
+                onOpenMenu={(x, y) =>
+                  setContextMenu({
+                    resource,
+                    x: Math.min(x, window.innerWidth - 204),
+                    y: Math.min(y, window.innerHeight - 154),
+                  })
+                }
                 onCommit={(position, size) => {
-                  const folderId = dropFolderFor(position, size);
-                  void onPatch(resource.id, {
-                    position,
-                    size,
-                    ...(folderId ? { folderId } : {}),
-                  });
+                    const folderId = homeDropActive
+                      ? null
+                      : dropFolderFor(position, size) ?? activeFolder;
+                    setDropTargetId(null);
+                    setHomeDropActive(false);
+                    setDraggingResource(false);
+                    void onPatch(resource.id, {
+                      position,
+                      size,
+                      folderId,
+                    });
+                  }}
+                onDragMove={(position, size, clientX, clientY) => {
+                  setDraggingResource(true);
+                  const overHome = activeFolder !== null && isOverHomeDropzone(clientX, clientY);
+                  setHomeDropActive(overHome);
+                  setDropTargetId(overHome ? null : dropFolderFor(position, size));
+                }}
+                onDragEnd={() => {
+                  setDropTargetId(null);
+                  setHomeDropActive(false);
+                  setDraggingResource(false);
                 }}
               />
             ))
           )}
 
-          {!activeFolder &&
-            folders.map((folder, index) => {
+          {visibleFolders.map((folder, index) => {
               const position =
-                folderPositions[index] ?? {
-                  x: 1140 + (index - 3) * 340,
-                  y: 540,
-                };
+                folderPosition(folder, index, folderPositions);
               const count = resources.filter(
                 (resource) => resource.folderId === folder.id,
               ).length;
               return (
-                <button
+                <FolderStack
                   key={folder.id}
-                  className="folder-stack"
-                  style={{ left: position.x, top: position.y }}
-                  onDoubleClick={() => setActiveFolder(folder.id)}
-                >
-                  <span className="folder-back" />
-                  <span className="folder-middle" />
-                  <span className="folder-front">
-                    <FolderOpen size={25} />
-                    <strong>{folder.name}</strong>
-                    <small>
-                      {count} {count === 1 ? 'item' : 'items'}
-                    </small>
-                  </span>
-                </button>
+                  folder={folder}
+                  position={position}
+                  scale={camera.scale}
+                  count={count}
+                  isDropTarget={dropTargetId === folder.id || folderDropTargetId === folder.id}
+                  onOpen={() => setActiveFolder(folder.id)}
+                  onOpenMenu={(x, y) =>
+                    setFolderContextMenu({
+                      folder,
+                      x: Math.min(x, window.innerWidth - 204),
+                      y: Math.min(y, window.innerHeight - 154),
+                    })
+                  }
+                  onMove={(nextPosition) => {
+                    setFolderPositions((current) => ({
+                      ...current,
+                      [folder.id]: nextPosition,
+                    }));
+                    const parentId = folderDropTargetFor(folder.id, nextPosition);
+                    setFolderDropTargetId(null);
+                    void onMoveFolder(folder.id, homeDropActive ? null : parentId ?? folder.parentId, nextPosition);
+                  }}
+                  onDragMove={(nextPosition, clientX, clientY) => {
+                    setDraggingFolder(true);
+                    setHomeDropActive(isOverHomeDropzone(clientX, clientY));
+                    setFolderDropTargetId(folderDropTargetFor(folder.id, nextPosition));
+                  }}
+                  onDragEnd={() => {
+                    setDraggingFolder(false);
+                    setHomeDropActive(false);
+                    setFolderDropTargetId(null);
+                  }}
+                />
               );
             })}
         </div>
 
-        {visibleResources.length === 0 && !loading && (
+        {visibleResources.length === 0 && visibleFolders.length === 0 && !loading && (
           <div className="empty-canvas">
             <Search size={22} />
             <strong>Nothing here yet</strong>
@@ -305,42 +556,131 @@ export function SpatialHome({
         )}
       </div>
 
+      {contextMenu && (
+        <ResourceContextMenu
+          {...contextMenu}
+          onClose={() => setContextMenu(null)}
+          onOpen={() => {
+            setContextMenu(null);
+            onOpen(contextMenu.resource.id);
+          }}
+          onRename={() => {
+            const title = window.prompt(
+              'Переименовать карточку',
+              contextMenu.resource.title,
+            );
+            const nextTitle = title?.trim();
+            setContextMenu(null);
+            if (nextTitle && nextTitle !== contextMenu.resource.title) {
+              void onPatch(contextMenu.resource.id, { title: nextTitle });
+            }
+          }}
+          onDelete={() => {
+            const confirmed = window.confirm(
+              `Удалить «${contextMenu.resource.title}»?`,
+            );
+            setContextMenu(null);
+            if (confirmed) void onDelete(contextMenu.resource.id);
+          }}
+        />
+      )}
+
+      {folderContextMenu && (
+        <FolderContextMenu
+          {...folderContextMenu}
+          onClose={() => setFolderContextMenu(null)}
+          onOpen={() => {
+            setFolderContextMenu(null);
+            setActiveFolder(folderContextMenu.folder.id);
+          }}
+          onRename={() => {
+            const name = window.prompt(
+              'Переименовать папку',
+              folderContextMenu.folder.name,
+            );
+            const nextName = name?.trim();
+            setFolderContextMenu(null);
+            if (nextName && nextName !== folderContextMenu.folder.name) {
+              void onRenameFolder(folderContextMenu.folder.id, nextName);
+            }
+          }}
+          onDelete={() => {
+            const confirmed = window.confirm(
+              `Удалить «${folderContextMenu.folder.name}»? Заметки останутся на главной доске.`,
+            );
+            setFolderContextMenu(null);
+            if (confirmed) void onDeleteFolder(folderContextMenu.folder.id);
+          }}
+        />
+      )}
+
       <nav className="canvas-tools" aria-label="Canvas controls">
-        <button title="Overview">
+        <button disabled title="Coming soon" aria-label="Overview (coming soon)">
           <LayoutDashboard size={17} />
         </button>
-        <button title="Folders">
+        <button disabled title="Coming soon" aria-label="Folders (coming soon)">
           <Folder size={17} />
         </button>
-        <button title="Preferences">
+        <button disabled title="Coming soon" aria-label="Preferences (coming soon)">
           <Settings2 size={17} />
         </button>
       </nav>
 
       <div className="create-cluster">
-        <button
-          className="create-secondary"
-          onClick={() => void onCreate('board')}
-          title="New board"
+        <div
+          className="create-menu-trigger"
+          onMouseEnter={() => setCreateMenuOpen(true)}
+          onMouseLeave={() => setCreateMenuOpen(false)}
         >
-          <Shapes size={18} />
-        </button>
-        <button
-          className="create-secondary"
-          onClick={() => void onCreate('note')}
-          title="New note"
-        >
-          <FilePlus2 size={18} />
-        </button>
-        <button
-          className="create-primary"
-          onClick={() => void onCreate('note')}
-          title="Create"
-        >
-          <Plus size={22} />
-        </button>
+          {createMenuOpen && (
+            <div className="create-menu" role="menu" aria-label="Create">
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setCreateMenuOpen(false);
+                  void onCreate('note');
+                }}
+              >
+                <FileText size={16} />
+                <span><strong>Note</strong><small>Write an idea</small></span>
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  const name = window.prompt('Folder name', 'Untitled folder')?.trim();
+                  if (!name) return;
+                  setCreateMenuOpen(false);
+                  void onCreateFolder(name, activeFolder, {
+                    x: 180 + (visibleFolders.length % 3) * 340,
+                    y: 430 + Math.floor(visibleFolders.length / 3) * 220,
+                  });
+                }}
+              >
+                <FolderPlus size={16} />
+                <span><strong>Folder</strong><small>Keep things together</small></span>
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setCreateMenuOpen(false);
+                  void onCreate('board');
+                }}
+              >
+                <Shapes size={16} />
+                <span><strong>Board</strong><small>Map things out</small></span>
+              </button>
+            </div>
+          )}
+          <button
+            className="create-primary"
+            onClick={() => setCreateMenuOpen((current) => !current)}
+            title="Create"
+            aria-expanded={createMenuOpen}
+          >
+            <Plus size={22} />
+          </button>
+        </div>
       </div>
-      <div className="zoom-label">{Math.round(camera.scale * 100)}%</div>
     </div>
   );
 }
@@ -349,20 +689,32 @@ interface ResourceCardProps {
   resource: WorkspaceResource;
   scale: number;
   onOpen: () => void;
+  onOpenMenu: (x: number, y: number) => void;
   onCommit: (
     position: WorkspaceResource['position'],
     size: WorkspaceResource['size'],
   ) => void;
+  onDragMove: (
+    position: WorkspaceResource['position'],
+    size: WorkspaceResource['size'],
+    clientX: number,
+    clientY: number,
+  ) => void;
+  onDragEnd: () => void;
 }
 
 function ResourceCard({
   resource,
   scale,
   onOpen,
+  onOpenMenu,
   onCommit,
+  onDragMove,
+  onDragEnd,
 }: ResourceCardProps) {
   const [position, setPosition] = useState(resource.position);
   const [size, setSize] = useState(resource.size);
+  const [dragging, setDragging] = useState(false);
   const interaction = useRef<{
     type: 'move' | 'resize';
     pointerId: number;
@@ -380,6 +732,7 @@ function ResourceCard({
     if (event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(type === 'move');
     interaction.current = {
       type,
       pointerId: event.pointerId,
@@ -399,10 +752,12 @@ function ResourceCard({
     const dy = (event.clientY - active.startY) / scale;
     if (Math.abs(dx) + Math.abs(dy) > 3) active.moved = true;
     if (active.type === 'move') {
-      setPosition({
+      const nextPosition = {
         x: snap(active.position.x + dx),
         y: snap(active.position.y + dy),
-      });
+      };
+      setPosition(nextPosition);
+      if (active.moved) onDragMove(nextPosition, size, event.clientX, event.clientY);
     } else {
       setSize({
         width: clamp(snap(active.size.width + dx), 240, 960),
@@ -416,14 +771,27 @@ function ResourceCard({
     if (!active || active.pointerId !== event.pointerId) return;
     event.stopPropagation();
     interaction.current = null;
+    setDragging(false);
     event.currentTarget.releasePointerCapture(event.pointerId);
     if (!active.moved && active.type === 'move') onOpen();
     else onCommit(position, size);
+    onDragEnd();
+  }
+
+  function cancel(event: ReactPointerEvent<HTMLElement>) {
+    const active = interaction.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    interaction.current = null;
+    setDragging(false);
+    onDragEnd();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   return (
     <article
-      className={`resource-card accent-${resource.accent}`}
+      className={`resource-card accent-${resource.accent}${resource.kind === 'note' ? ' is-note' : ''}${dragging ? ' is-dragging' : ''}`}
       style={{
         left: position.x,
         top: position.y,
@@ -433,42 +801,359 @@ function ResourceCard({
       onPointerDown={(event) => begin(event, 'move')}
       onPointerMove={move}
       onPointerUp={end}
-      onPointerCancel={end}
+      onPointerCancel={cancel}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenMenu(event.clientX, event.clientY);
+      }}
     >
-      <div className="resource-meta">
-        <span>{resource.kind === 'note' ? 'Note' : 'Board'}</span>
-        <i />
-      </div>
-      <h2>{resource.title}</h2>
       {resource.kind === 'note' ? (
-        <p>{resource.preview}</p>
+        <NotePreview resource={resource} />
       ) : (
-        <div className="board-preview" aria-hidden="true">
-          <span className="preview-sticky one">Launch</span>
-          <span className="preview-sticky two">Research</span>
-          <span className="preview-line" />
-          <span className="preview-dot a" />
-          <span className="preview-dot b" />
-        </div>
+        <>
+          <div className="resource-meta">
+            <span>Board</span>
+            <i />
+          </div>
+          <h2>{resource.title}</h2>
+          <div className="board-preview" aria-hidden="true">
+            <span className="preview-sticky one">Launch</span>
+            <span className="preview-sticky two">Research</span>
+            <span className="preview-line" />
+            <span className="preview-dot a" />
+            <span className="preview-dot b" />
+          </div>
+        </>
       )}
-      <footer>
-        <span>
-          {new Intl.DateTimeFormat('en', {
-            month: 'short',
-            day: 'numeric',
-          }).format(new Date(resource.updatedAt))}
-        </span>
-        {resource.role !== 'owner' && <b>{resource.role}</b>}
-      </footer>
+      {resource.kind !== 'note' && (
+        <footer>
+          <span>{formatUpdatedAt(resource.updatedAt)}</span>
+          {resource.role !== 'owner' && <b>{resource.role}</b>}
+        </footer>
+      )}
       <button
         className="resize-handle"
         onPointerDown={(event) => begin(event, 'resize')}
         onPointerMove={move}
         onPointerUp={end}
-        onPointerCancel={end}
+        onPointerCancel={cancel}
         aria-label="Resize card"
       />
     </article>
+  );
+}
+
+function NotePreview({ resource }: { resource: WorkspaceResource }) {
+  const [content, setContent] = useState(resource.preview);
+
+  useEffect(() => {
+    const document = new Y.Doc();
+    const persistence = new IndexeddbPersistence(
+      roomNames.resource(resource.id),
+      document,
+    );
+    let disposed = false;
+    const updatePreview = () => {
+      const text = readNoteText(document);
+      if (!disposed && text) setContent(text);
+    };
+
+    persistence.on('synced', updatePreview);
+    document.on('update', updatePreview);
+    return () => {
+      disposed = true;
+      document.off('update', updatePreview);
+      persistence.destroy();
+      document.destroy();
+    };
+  }, [resource.id]);
+
+  return (
+    <div className="note-preview">
+      <h2>{resource.title}</h2>
+      <time className="note-preview-date" dateTime={resource.updatedAt}>
+        {formatUpdatedAt(resource.updatedAt)}
+      </time>
+      <div className="note-preview-content">{renderNotePreview(content)}</div>
+    </div>
+  );
+}
+
+function readNoteText(document: Y.Doc): string {
+  return document.getXmlFragment('content').toString().trim();
+}
+
+function renderNotePreview(content: string): ReactNode {
+  if (!content.includes('<')) return content;
+  const parsed = new DOMParser().parseFromString(
+    `<preview>${content}</preview>`,
+    'text/xml',
+  );
+  if (parsed.querySelector('parsererror')) return content.replace(/<[^>]*>/g, ' ');
+  return renderPreviewNodes(Array.from(parsed.documentElement.childNodes));
+}
+
+function renderPreviewNodes(nodes: Node[]): ReactNode[] {
+  return nodes.map((node, index) => renderPreviewNode(node, index));
+}
+
+function renderPreviewNode(node: Node, key: number): ReactNode {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+  const element = node as Element;
+  const children = renderPreviewNodes(Array.from(element.childNodes));
+  switch (element.tagName.toLowerCase()) {
+    case 'paragraph':
+      return <p key={key}>{children}</p>;
+    case 'heading':
+      return <strong className="note-preview-heading" key={key}>{children}</strong>;
+    case 'bulletlist':
+      return <ul key={key}>{children}</ul>;
+    case 'orderedlist':
+      return <ol key={key}>{children}</ol>;
+    case 'listitem':
+      return <li key={key}>{children}</li>;
+    case 'bold':
+    case 'strong':
+      return <strong key={key}>{children}</strong>;
+    case 'italic':
+    case 'em':
+      return <em key={key}>{children}</em>;
+    case 'underline':
+      return <u key={key}>{children}</u>;
+    case 'strike':
+      return <s key={key}>{children}</s>;
+    case 'highlight':
+      return <mark key={key}>{children}</mark>;
+    case 'hardbreak':
+      return <br key={key} />;
+    default:
+      return <span key={key}>{children}</span>;
+  }
+}
+
+function formatUpdatedAt(updatedAt: string) {
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(updatedAt));
+}
+
+function ResourceContextMenu({
+  resource,
+  x,
+  y,
+  onClose,
+  onOpen,
+  onRename,
+  onDelete,
+}: ResourceContextMenuState & {
+  onClose: () => void;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className="resource-context-menu"
+      role="menu"
+      aria-label={`Actions for ${resource.title}`}
+      style={{ left: x, top: y }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <button role="menuitem" onClick={onOpen}>
+        <ArrowUpRight size={15} /> Open
+      </button>
+      <button role="menuitem" onClick={onRename}>
+        <Pencil size={15} /> Rename
+      </button>
+      <span className="resource-context-menu-divider" />
+      <button className="is-danger" role="menuitem" onClick={onDelete}>
+        <Trash2 size={15} /> Delete
+      </button>
+    </div>
+  );
+}
+
+function FolderContextMenu({
+  folder,
+  x,
+  y,
+  onClose,
+  onOpen,
+  onRename,
+  onDelete,
+}: FolderContextMenuState & {
+  onClose: () => void;
+  onOpen: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className="resource-context-menu"
+      role="menu"
+      aria-label={`Actions for ${folder.name}`}
+      style={{ left: x, top: y }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <button role="menuitem" onClick={onOpen}>
+        <ArrowUpRight size={15} /> Open
+      </button>
+      <button role="menuitem" onClick={onRename}>
+        <Pencil size={15} /> Rename
+      </button>
+      <span className="resource-context-menu-divider" />
+      <button className="is-danger" role="menuitem" onClick={onDelete}>
+        <Trash2 size={15} /> Delete
+      </button>
+    </div>
+  );
+}
+
+interface FolderStackProps {
+  folder: FolderSummary;
+  position: WorkspaceResource['position'];
+  scale: number;
+  count: number;
+  isDropTarget: boolean;
+  onOpen: () => void;
+  onOpenMenu: (x: number, y: number) => void;
+  onMove: (position: WorkspaceResource['position']) => void;
+  onDragMove: (
+    position: WorkspaceResource['position'],
+    clientX: number,
+    clientY: number,
+  ) => void;
+  onDragEnd: () => void;
+}
+
+function FolderStack({
+  folder,
+  position: initialPosition,
+  scale,
+  count,
+  isDropTarget,
+  onOpen,
+  onOpenMenu,
+  onMove,
+  onDragMove,
+  onDragEnd,
+}: FolderStackProps) {
+  const [position, setPosition] = useState(initialPosition);
+  const [dragging, setDragging] = useState(false);
+  const interaction = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startPosition: WorkspaceResource['position'];
+    position: WorkspaceResource['position'];
+    moved: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    setPosition(initialPosition);
+  }, [initialPosition.x, initialPosition.y]);
+
+  function begin(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    interaction.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startPosition: position,
+      position,
+      moved: false,
+    };
+  }
+
+  function move(event: ReactPointerEvent<HTMLButtonElement>) {
+    const active = interaction.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    const dx = (event.clientX - active.startX) / scale;
+    const dy = (event.clientY - active.startY) / scale;
+    if (Math.abs(dx) + Math.abs(dy) > 3) {
+      active.moved = true;
+      setDragging(true);
+    }
+    const nextPosition = {
+      x: snap(active.startPosition.x + dx),
+      y: snap(active.startPosition.y + dy),
+    };
+    active.position = nextPosition;
+    setPosition(nextPosition);
+    if (active.moved) onDragMove(nextPosition, event.clientX, event.clientY);
+  }
+
+  function end(event: ReactPointerEvent<HTMLButtonElement>) {
+    const active = interaction.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    interaction.current = null;
+    setDragging(false);
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    if (active.moved) onMove(active.position);
+    else onOpen();
+    onDragEnd();
+  }
+
+  function cancel(event: ReactPointerEvent<HTMLButtonElement>) {
+    const active = interaction.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    interaction.current = null;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setPosition(active.startPosition);
+    onDragEnd();
+  }
+
+  return (
+    <button
+      className={`folder-stack${dragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
+      style={{ left: position.x, top: position.y }}
+      onPointerDown={begin}
+      onPointerMove={move}
+      onPointerUp={end}
+      onPointerCancel={cancel}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenMenu(event.clientX, event.clientY);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      aria-label={`Open ${folder.name}`}
+    >
+      <span className="folder-back" />
+      <span className="folder-middle" />
+      <span className="folder-front">
+        <FolderOpen size={25} />
+        <strong>{folder.name}</strong>
+        <small>
+          {count} {count === 1 ? 'item' : 'items'}
+        </small>
+        {isDropTarget && <em className="folder-drop-hint">Move here</em>}
+      </span>
+    </button>
   );
 }
 

@@ -1,4 +1,4 @@
-import { Controller, Param, Post } from '@nestjs/common';
+import { Controller, Inject, Param, Post } from '@nestjs/common';
 import type { AcceptInviteResult } from '@fixnote/contracts';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
@@ -6,7 +6,7 @@ import { InvitesService } from './invites.service.js';
 
 @Controller('invites')
 export class InvitesController {
-  constructor(private readonly invites: InvitesService) {}
+  constructor(@Inject(InvitesService) private readonly invites: InvitesService) {}
 
   @Post(':token/accept')
   accept(

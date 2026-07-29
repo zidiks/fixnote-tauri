@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { SearchResult } from '@fixnote/contracts';
 import {
   Prisma,
@@ -22,8 +22,8 @@ interface SearchRow {
 @Injectable()
 export class SearchService {
   constructor(
-    private readonly crypto: CryptoService,
-    private readonly profiles: ProfilesService,
+    @Inject(CryptoService) private readonly crypto: CryptoService,
+    @Inject(ProfilesService) private readonly profiles: ProfilesService,
   ) {}
 
   async search(

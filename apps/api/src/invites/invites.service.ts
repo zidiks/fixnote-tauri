@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   GoneException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,7 +16,7 @@ import { ProfilesService } from '../profiles/profiles.service.js';
 
 @Injectable()
 export class InvitesService {
-  constructor(private readonly profiles: ProfilesService) {}
+  constructor(@Inject(ProfilesService) private readonly profiles: ProfilesService) {}
 
   async accept(
     user: AuthenticatedUser,

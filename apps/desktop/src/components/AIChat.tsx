@@ -7,7 +7,6 @@ import {
   FileText,
   PanelRightClose,
   Sparkles,
-  WandSparkles,
   X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -123,36 +122,6 @@ export function AIChat({
   return (
     <>
       <AnimatePresence>
-        {!open && (
-          <motion.div
-            className="ai-composer-shell"
-            initial={{ opacity: 0, y: 20, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, x: 240, scale: 0.9 }}
-            transition={{ type: 'spring', stiffness: 280, damping: 25 }}
-          >
-            <Sparkles size={17} />
-            <input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') send();
-              }}
-              placeholder="Спросить FixNote или создать что-то…"
-              aria-label="AI input"
-            />
-            <button
-              className="ai-expand-button"
-              onClick={() => (draft.trim() ? send() : onOpenChange(true))}
-              aria-label="Open AI chat"
-            >
-              {draft.trim() ? <ArrowUp size={17} /> : <ChevronRight size={17} />}
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
         {open && (
           <motion.aside
             className="ai-dock"
@@ -162,9 +131,6 @@ export function AIChat({
             transition={{ type: 'spring', stiffness: 260, damping: 30 }}
           >
             <header className="ai-dock-header">
-              <div className="ai-orb">
-                <WandSparkles size={17} />
-              </div>
               <div>
                 <strong>FixNote AI</strong>
                 <span>{scope ? scope.title : 'Все доступные заметки'}</span>
@@ -276,7 +242,6 @@ export function AIChat({
               >
                 <ArrowUp size={17} />
               </button>
-              <span>Enter — отправить · Shift Enter — новая строка</span>
             </div>
           </motion.aside>
         )}

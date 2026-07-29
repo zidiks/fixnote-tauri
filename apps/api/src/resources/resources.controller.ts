@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Inject,
   Param,
   Patch,
   Post,
@@ -24,7 +25,7 @@ import { ResourcesService } from './resources.service.js';
 
 @Controller('resources')
 export class ResourcesController {
-  constructor(private readonly resources: ResourcesService) {}
+  constructor(@Inject(ResourcesService) private readonly resources: ResourcesService) {}
 
   @Get()
   list(

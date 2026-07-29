@@ -1,7 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import {
   type CreateFolderInput,
   type FolderSummary,
+  type UpdateFolderInput,
 } from '@fixnote/contracts';
 import { prisma, type Folder } from '@fixnote/database';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
@@ -13,8 +14,8 @@ type FolderWithKey = Folder;
 @Injectable()
 export class FoldersService {
   constructor(
-    private readonly crypto: CryptoService,
-    private readonly profiles: ProfilesService,
+    @Inject(CryptoService) private readonly crypto: CryptoService,
+    @Inject(ProfilesService) private readonly profiles: ProfilesService,
   ) {}
 
   async list(user: AuthenticatedUser): Promise<FolderSummary[]> {
@@ -64,6 +65,9 @@ export class FoldersService {
           ...(input.parentId !== undefined
             ? { parentId: input.parentId }
             : {}),
+          ...(input.position
+            ? { positionX: input.position.x, positionY: input.position.y }
+            : {}),
           nameCiphertext: dbBytes(encryptedName),
           wrappedDek: dbBytes(wrapped),
           keyVersion: this.crypto.keyVersion,
@@ -76,6 +80,89 @@ export class FoldersService {
     });
 
     return this.toSummary(folder);
+  }
+
+  async update(
+    user: AuthenticatedUser,
+    folderId: string,
+    input: UpdateFolderInput,
+  ): Promise<FolderSummary> {
+    const profile = await this.profiles.ensure(user);
+    const folder = await this.findOwned(folderId, profile.id);
+    if (input.parentId === folder.id) {
+      throw new NotFoundException('A folder cannot contain itself');
+    }
+    if (input.parentId) {
+      await this.findOwned(input.parentId, profile.id);
+      if (await this.isDescendant(input.parentId, folder.id, profile.id)) {
+        throw new NotFoundException('A folder cannot contain one of its ancestors');
+      }
+    }
+    const data =
+      input.name === undefined
+        ? {
+            ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+            ...(input.position ? { positionX: input.position.x, positionY: input.position.y } : {}),
+          }
+        : {
+            nameCiphertext: dbBytes(
+              this.crypto.envelope.encrypt(
+                Buffer.from(input.name, 'utf8'),
+                this.crypto.envelope.unwrapDataKey(
+                  folder.wrappedDek,
+                  this.crypto.folderDataKeyAad(folder.id),
+                ),
+                this.crypto.folderFieldAad(folder.id, 'name'),
+              ),
+            ),
+            ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+            ...(input.position ? { positionX: input.position.x, positionY: input.position.y } : {}),
+          };
+    const updated = await prisma.folder.update({
+      where: { id: folder.id },
+      data,
+    });
+    return this.toSummary(updated);
+  }
+
+  async remove(user: AuthenticatedUser, folderId: string): Promise<void> {
+    const profile = await this.profiles.ensure(user);
+    await this.findOwned(folderId, profile.id);
+    await prisma.$transaction([
+      prisma.resource.updateMany({
+        where: { ownerId: profile.id, folderId },
+        data: { folderId: null },
+      }),
+      prisma.folder.updateMany({
+        where: { ownerId: profile.id, parentId: folderId, deletedAt: null },
+        data: { parentId: null },
+      }),
+      prisma.folder.update({
+        where: { id: folderId },
+        data: { deletedAt: new Date() },
+      }),
+    ]);
+  }
+
+  private async findOwned(folderId: string, ownerId: string): Promise<Folder> {
+    const folder = await prisma.folder.findFirst({
+      where: { id: folderId, ownerId, deletedAt: null },
+    });
+    if (!folder) throw new NotFoundException('Folder not found');
+    return folder;
+  }
+
+  private async isDescendant(folderId: string, ancestorId: string, ownerId: string): Promise<boolean> {
+    let currentId: string | null = folderId;
+    while (currentId) {
+      if (currentId === ancestorId) return true;
+      const current: { parentId: string | null } | null = await prisma.folder.findFirst({
+        where: { id: currentId, ownerId, deletedAt: null },
+        select: { parentId: true },
+      });
+      currentId = current?.parentId ?? null;
+    }
+    return false;
   }
 
   private toSummary(folder: FolderWithKey): FolderSummary {
@@ -94,6 +181,7 @@ export class FoldersService {
     return {
       id: folder.id,
       parentId: folder.parentId,
+      position: { x: folder.positionX, y: folder.positionY },
       name,
       ownerId: folder.ownerId,
       createdAt: folder.createdAt.toISOString(),

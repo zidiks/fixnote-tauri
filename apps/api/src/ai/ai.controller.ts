@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Inject, Post } from '@nestjs/common';
 import {
   aiChatRequestSchema,
   type AiChatRequest,
@@ -10,7 +10,7 @@ import { AiService } from './ai.service.js';
 
 @Controller('ai')
 export class AiController {
-  constructor(private readonly ai: AiService) {}
+  constructor(@Inject(AiService) private readonly ai: AiService) {}
 
   @Post('chat')
   chat(

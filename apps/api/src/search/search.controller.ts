@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Inject, Query } from '@nestjs/common';
 import type { SearchResult } from '@fixnote/contracts';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
@@ -6,7 +6,7 @@ import { SearchService } from './search.service.js';
 
 @Controller('search')
 export class SearchController {
-  constructor(private readonly search: SearchService) {}
+  constructor(@Inject(SearchService) private readonly search: SearchService) {}
 
   @Get()
   run(

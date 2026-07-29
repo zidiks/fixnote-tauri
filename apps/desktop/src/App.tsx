@@ -11,8 +11,13 @@ import { SpatialHome } from './components/SpatialHome';
 import type { WorkspaceResource, WorkspaceSnapshot } from './domain';
 import {
   createResource,
+  createFolder,
+  deleteFolder,
+  deleteResource,
   loadWorkspace,
   saveWorkspace,
+  signOut,
+  updateFolder,
   updateResource,
 } from './lib/api';
 
@@ -101,6 +106,60 @@ export function App() {
     }));
   }
 
+  async function removeResource(resourceId: string) {
+    const current = snapshot.resources.find(
+      (resource) => resource.id === resourceId,
+    );
+    if (!current) return;
+    await deleteResource(current, snapshot);
+    setSnapshot((state) => ({
+      ...state,
+      resources: state.resources.filter((resource) => resource.id !== resourceId),
+    }));
+    if (screen.kind === 'resource' && screen.resourceId === resourceId) {
+      setScreen({ kind: 'home' });
+    }
+  }
+
+  async function renameFolder(folderId: string, name: string) {
+    const current = snapshot.folders.find((folder) => folder.id === folderId);
+    if (!current) return;
+    const updated = await updateFolder(current, { name });
+    setSnapshot((state) => ({
+      ...state,
+      folders: state.folders.map((folder) =>
+        folder.id === folderId ? updated : folder,
+      ),
+    }));
+  }
+
+  async function moveFolder(folderId: string, parentId: string | null, position: { x: number; y: number }) {
+    const current = snapshot.folders.find((folder) => folder.id === folderId);
+    if (!current) return;
+    const updated = await updateFolder(current, { parentId, position });
+    setSnapshot((state) => ({
+      ...state,
+      folders: state.folders.map((folder) =>
+        folder.id === folderId ? updated : folder,
+      ),
+    }));
+  }
+
+  async function addFolder(name: string, parentId: string | null, position: { x: number; y: number }) {
+    const folder = await createFolder({ name, parentId, position }, snapshot);
+    setSnapshot((state) => ({ ...state, folders: [...state.folders, folder] }));
+  }
+
+  async function removeFolder(folderId: string) {
+    await deleteFolder(folderId, snapshot);
+    setSnapshot((state) => ({
+      folders: state.folders.filter((folder) => folder.id !== folderId),
+      resources: state.resources.map((resource) =>
+        resource.folderId === folderId ? { ...resource, folderId: null } : resource,
+      ),
+    }));
+  }
+
   async function applyAiProposal(proposal: AiProposal) {
     if (proposal.type === 'create_note') {
       const created = await addResource('note', proposal.title);
@@ -116,8 +175,6 @@ export function App() {
     <div className="app-frame">
       <motion.main
         className="app-content"
-        animate={{ marginRight: chatOpen ? 404 : 0 }}
-        transition={{ type: 'spring', stiffness: 260, damping: 30 }}
       >
         <AnimatePresence mode="wait">
           {screen.kind === 'home' || !activeResource ? (
@@ -136,8 +193,14 @@ export function App() {
                   setScreen({ kind: 'resource', resourceId })
                 }
                 onCreate={addResource}
+                onCreateFolder={addFolder}
                 onPatch={patchResource}
+                onDelete={removeResource}
+                onRenameFolder={renameFolder}
+                onDeleteFolder={removeFolder}
+                onMoveFolder={moveFolder}
                 onOpenChat={() => setChatOpen(true)}
+                onSignOut={signOut}
               />
             </motion.div>
           ) : activeResource.kind === 'note' ? (
