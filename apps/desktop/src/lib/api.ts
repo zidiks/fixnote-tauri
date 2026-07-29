@@ -1,6 +1,8 @@
 import {
   aiChatRequestSchema,
   aiChatResponseSchema,
+  aiProposalDecisionResultSchema,
+  aiThreadHistorySchema,
   createResourceSchema,
   createFolderSchema,
   folderSummarySchema,
@@ -11,6 +13,8 @@ import {
   type CreateResourceInput,
   type CreateFolderInput,
   type AiChatResponse,
+  type AiProposalDecisionResult,
+  type AiThreadHistory,
   type FolderSummary,
   type InviteCollaboratorInput,
   type ShareEntry,
@@ -362,16 +366,44 @@ export async function searchWorkspace(query: string): Promise<SearchResult[]> {
 export async function askAi(
   message: string,
   resourceId?: string,
+  threadId?: string,
 ): Promise<AiChatResponse> {
   const body = aiChatRequestSchema.parse({
     message,
     ...(resourceId ? { resourceId } : {}),
+    ...(threadId ? { threadId } : {}),
   });
   return aiChatResponseSchema.parse(
     await request('/ai/chat', {
       method: 'POST',
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(45_000),
+    }),
+  );
+}
+
+export async function loadAiThread(
+  resourceId?: string,
+): Promise<AiThreadHistory> {
+  const query = resourceId
+    ? `?resourceId=${encodeURIComponent(resourceId)}`
+    : '';
+  return aiThreadHistorySchema.parse(
+    await request(`/ai/thread${query}`, {
+      signal: AbortSignal.timeout(10_000),
+    }),
+  );
+}
+
+export async function decideAiProposal(
+  proposalId: string,
+  status: 'applied' | 'rejected',
+): Promise<AiProposalDecisionResult> {
+  return aiProposalDecisionResultSchema.parse(
+    await request(`/ai/proposals/${encodeURIComponent(proposalId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+      signal: AbortSignal.timeout(10_000),
     }),
   );
 }

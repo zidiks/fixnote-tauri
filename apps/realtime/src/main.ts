@@ -44,11 +44,13 @@ const server = new Server({
     await storeEncryptedDocument(documentName, document);
   },
 
-  async onRequest({ request, response }) {
+  onRequest({ request, response }) {
     if (request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ status: 'ok', service: 'realtime' }));
+      return Promise.reject();
     }
+    return Promise.resolve();
   },
 });
 

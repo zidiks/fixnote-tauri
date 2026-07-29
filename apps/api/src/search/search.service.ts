@@ -12,6 +12,7 @@ import { ProfilesService } from '../profiles/profiles.service.js';
 interface SearchRow {
   resourceId: string;
   nodeId: string | null;
+  chunkKind: string;
   kind: ResourceKind;
   titleCiphertext: Uint8Array;
   contentCiphertext: Uint8Array;
@@ -21,6 +22,8 @@ interface SearchRow {
 
 @Injectable()
 export class SearchService {
+  private embeddingsUnavailableUntil = 0;
+
   constructor(
     @Inject(CryptoService) private readonly crypto: CryptoService,
     @Inject(ProfilesService) private readonly profiles: ProfilesService,
@@ -61,6 +64,7 @@ export class SearchService {
       SELECT
         r."id" AS "resourceId",
         sc."nodeId" AS "nodeId",
+        sc."kind" AS "chunkKind",
         r."kind" AS "kind",
         r."titleCiphertext" AS "titleCiphertext",
         sc."contentCiphertext" AS "contentCiphertext",
@@ -68,7 +72,7 @@ export class SearchService {
         (
           0.45 * ts_rank_cd(
             sc."searchVector",
-            plainto_tsquery('simple', ${query})
+            websearch_to_tsquery('simple', ${query})
           ) +
           0.55 * COALESCE(
             1 - (
@@ -105,19 +109,20 @@ export class SearchService {
       SELECT
         r."id" AS "resourceId",
         sc."nodeId" AS "nodeId",
+        sc."kind" AS "chunkKind",
         r."kind" AS "kind",
         r."titleCiphertext" AS "titleCiphertext",
         sc."contentCiphertext" AS "contentCiphertext",
         rk."wrappedDek" AS "wrappedDek",
         ts_rank_cd(
           sc."searchVector",
-          plainto_tsquery('simple', ${query})
+          websearch_to_tsquery('simple', ${query})
         )::double precision AS "score"
       FROM "search_chunks" sc
       JOIN "resources" r ON r."id" = sc."resourceId"
       JOIN "resource_keys" rk ON rk."resourceId" = r."id"
       WHERE r."deletedAt" IS NULL
-        AND sc."searchVector" @@ plainto_tsquery('simple', ${query})
+        AND sc."searchVector" @@ websearch_to_tsquery('simple', ${query})
         AND (
           r."ownerId" = ${profileId}::uuid OR EXISTS (
             SELECT 1
@@ -147,10 +152,11 @@ export class SearchService {
     const content = this.crypto.envelope.decryptText(
       row.contentCiphertext,
       dataKey,
-      this.crypto.resourceFieldAad(
+      this.crypto.searchChunkAad(
         row.resourceId,
         kind,
-        'search:document',
+        row.chunkKind,
+        row.nodeId,
       ),
     );
 
@@ -166,9 +172,14 @@ export class SearchService {
   }
 
   private async embed(input: string): Promise<number[] | null> {
-    if (!process.env.EMBEDDINGS_API_URL) return null;
+    if (
+      !process.env.EMBEDDINGS_API_URL ||
+      Date.now() < this.embeddingsUnavailableUntil
+    ) {
+      return null;
+    }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const timeout = setTimeout(() => controller.abort(), 1_500);
     try {
       const response = await fetch(
         `${process.env.EMBEDDINGS_API_URL.replace(/\/$/, '')}/embed`,
@@ -179,17 +190,26 @@ export class SearchService {
           signal: controller.signal,
         },
       );
-      if (!response.ok) return null;
+      if (!response.ok) {
+        this.embeddingsUnavailableUntil = Date.now() + 60_000;
+        return null;
+      }
       const payload = (await response.json()) as unknown;
+      const dimensions = Number(
+        process.env.EMBEDDINGS_DIMENSIONS ?? '768',
+      );
       if (
         Array.isArray(payload) &&
         Array.isArray(payload[0]) &&
+        payload[0].length === dimensions &&
         payload[0].every((value) => typeof value === 'number')
       ) {
         return payload[0] as number[];
       }
+      this.embeddingsUnavailableUntil = Date.now() + 60_000;
       return null;
     } catch {
+      this.embeddingsUnavailableUntil = Date.now() + 60_000;
       return null;
     } finally {
       clearTimeout(timeout);

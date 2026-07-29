@@ -156,14 +156,67 @@ export type SearchResult = z.infer<typeof searchResultSchema>;
 export const aiChatRequestSchema = z.object({
   message: z.string().trim().min(1).max(8000),
   resourceId: z.string().uuid().optional(),
+  threadId: z.string().uuid().optional(),
 });
 export type AiChatRequest = z.infer<typeof aiChatRequestSchema>;
 
-export const aiChatResponseSchema = z.object({
-  answer: z.string(),
+export const aiProposalTypeSchema = z.enum([
+  "create_note",
+  "rename_resource",
+]);
+export type AiProposalType = z.infer<typeof aiProposalTypeSchema>;
+
+export const aiProposalStatusSchema = z.enum([
+  "pending",
+  "applied",
+  "rejected",
+  "expired",
+]);
+export type AiProposalStatus = z.infer<typeof aiProposalStatusSchema>;
+
+export const aiProposalSchema = z.object({
+  id: z.string().uuid(),
+  type: aiProposalTypeSchema,
+  title: z.string().trim().min(1).max(240),
+  resourceId: z.string().uuid().nullable(),
+  status: aiProposalStatusSchema,
+});
+export type AiProposal = z.infer<typeof aiProposalSchema>;
+
+export const aiChatMessageSchema = z.object({
+  id: z.string().uuid(),
+  role: z.enum(["user", "assistant"]),
+  text: z.string(),
   citations: searchResultSchema.array(),
+  proposal: aiProposalSchema.nullable(),
+  createdAt: z.string().datetime(),
+});
+export type AiChatMessage = z.infer<typeof aiChatMessageSchema>;
+
+export const aiChatResponseSchema = z.object({
+  threadId: z.string().uuid(),
+  userMessage: aiChatMessageSchema,
+  assistantMessage: aiChatMessageSchema,
 });
 export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
+
+export const aiThreadHistorySchema = z.object({
+  threadId: z.string().uuid().nullable(),
+  messages: aiChatMessageSchema.array(),
+});
+export type AiThreadHistory = z.infer<typeof aiThreadHistorySchema>;
+
+export const aiProposalDecisionSchema = z.object({
+  status: z.enum(["applied", "rejected"]),
+});
+export type AiProposalDecision = z.infer<typeof aiProposalDecisionSchema>;
+
+export const aiProposalDecisionResultSchema = z.object({
+  proposal: aiProposalSchema,
+});
+export type AiProposalDecisionResult = z.infer<
+  typeof aiProposalDecisionResultSchema
+>;
 
 export const aiActionTypeSchema = z.enum([
   "create_resource",

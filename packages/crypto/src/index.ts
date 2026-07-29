@@ -123,6 +123,32 @@ export function folderAad(folderId: string, field: string, schemaVersion = 1): s
   return `fixnote|folder|${folderId}|${field}|schema:${schemaVersion}`;
 }
 
+export function profileAad(profileId: string, field: string, schemaVersion = 1): string {
+  return `fixnote|profile|${profileId}|${field}|schema:${schemaVersion}`;
+}
+
+export function aiThreadAad(threadId: string, field: string, schemaVersion = 1): string {
+  return `fixnote|ai-thread|${threadId}|${field}|schema:${schemaVersion}`;
+}
+
+export function searchChunkAad(
+  resourceId: string,
+  resourceKind: string,
+  chunkKind: string,
+  nodeId: string | null,
+  schemaVersion = 1,
+): string {
+  const field = nodeId
+    ? `search:${chunkKind}:${nodeId}`
+    : `search:${chunkKind}`;
+  return resourceAad(
+    resourceId,
+    resourceKind,
+    field,
+    schemaVersion,
+  );
+}
+
 export function documentAad(documentName: string, schemaVersion = 1): string {
   return `fixnote|ydoc|${documentName}|schema:${schemaVersion}`;
 }
@@ -173,4 +199,3 @@ function readVersion(payload: Uint8Array): number {
   if (bytes.length < 2) throw new CryptoIntegrityError("Encrypted payload is too short");
   return bytes.readUInt16BE(0);
 }
-

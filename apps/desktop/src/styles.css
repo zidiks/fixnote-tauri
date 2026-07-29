@@ -2191,6 +2191,20 @@ button,
   scrollbar-color: #d5d7d2 transparent;
 }
 
+.ai-thread-loading {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 8px;
+  margin: auto;
+  color: #858d88;
+  font-size: 11px;
+}
+
+.ai-thread-loading svg {
+  animation: spin 0.8s linear infinite;
+}
+
 .ai-empty {
   display: flex;
   min-height: 100%;
@@ -2312,7 +2326,7 @@ button,
   background: #f1f5f1;
 }
 
-.proposal-card > div {
+.proposal-card > div:first-child {
   display: flex;
   min-width: 0;
   flex: 1;
@@ -2332,7 +2346,16 @@ button,
   white-space: nowrap;
 }
 
-.proposal-card > button {
+.proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.proposal-actions button {
+  display: grid;
+  min-height: 29px;
+  place-items: center;
   padding: 7px 9px;
   border-radius: 8px;
   background: #27302b;
@@ -2342,12 +2365,71 @@ button,
   font-weight: 700;
 }
 
-.applied-label {
+.proposal-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.proposal-actions .proposal-reject {
+  width: 29px;
+  padding: 0;
+  background: transparent;
+  color: #858d88;
+}
+
+.proposal-actions .proposal-reject:hover {
+  background: #e4e9e4;
+  color: #505953;
+}
+
+.proposal-status {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #2a755d !important;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.proposal-status.applied {
+  color: #2a755d !important;
+}
+
+.proposal-status.rejected,
+.proposal-status.expired {
+  color: #8b918d !important;
+}
+
+.ai-thinking {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-thinking > span:not(.assistant-dot) {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  animation: ai-pulse 1.05s ease-in-out infinite;
+  background: #929b95;
+}
+
+.ai-thinking > span:nth-child(3) {
+  animation-delay: 0.12s;
+}
+
+.ai-thinking > span:nth-child(4) {
+  animation-delay: 0.24s;
+}
+
+.ai-chat-error {
+  padding: 9px 11px;
+  border: 1px solid rgba(174, 87, 72, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 240, 235, 0.74);
+  color: #9b584d;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .ai-dock-composer {
@@ -2372,6 +2454,10 @@ button,
   line-height: 1.45;
 }
 
+.ai-dock-composer textarea:disabled {
+  color: #8a918c;
+}
+
 .ai-dock-composer .send-button {
   position: absolute;
   top: 50%;
@@ -2380,6 +2466,30 @@ button,
   height: 34px;
   border-radius: 11px;
   transform: translateY(-50%);
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ai-pulse {
+  0%,
+  70%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+
+  35% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 
 .send-button:disabled {

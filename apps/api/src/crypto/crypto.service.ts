@@ -1,10 +1,13 @@
 import { Injectable } from "@nestjs/common";
 import {
   EnvelopeCrypto,
+  aiThreadAad,
   createKeyringFromEnv,
   documentAad,
   folderAad,
+  profileAad,
   resourceAad,
+  searchChunkAad,
 } from "@fixnote/crypto";
 
 @Injectable()
@@ -27,6 +30,28 @@ export class CryptoService {
 
   folderFieldAad(folderId: string, field: string): string {
     return folderAad(folderId, field);
+  }
+
+  profileFieldAad(profileId: string, field: string): string {
+    return profileAad(profileId, field);
+  }
+
+  aiThreadFieldAad(threadId: string, field: string): string {
+    return aiThreadAad(threadId, field);
+  }
+
+  searchChunkAad(
+    resourceId: string,
+    resourceKind: string,
+    chunkKind: string,
+    nodeId: string | null,
+  ): string {
+    return searchChunkAad(
+      resourceId,
+      resourceKind,
+      chunkKind,
+      nodeId,
+    );
   }
 
   documentAad(documentName: string): string {

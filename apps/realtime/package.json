@@ -12,6 +12,7 @@
   "dependencies": {
     "@fixnote/crypto": "workspace:*",
     "@fixnote/database": "workspace:*",
+    "@fixnote/search": "workspace:*",
     "@fixnote/sync": "workspace:*",
     "@hocuspocus/server": "^3.0.0",
     "dotenv": "^16.5.0",

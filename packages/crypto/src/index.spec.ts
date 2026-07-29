@@ -3,7 +3,9 @@ import { test } from "node:test";
 import {
   CryptoIntegrityError,
   EnvelopeCrypto,
+  aiThreadAad,
   documentAad,
+  profileAad,
   resourceAad,
   type Keyring,
 } from "./index.js";
@@ -50,3 +52,35 @@ test("rewraps a data key without re-encrypting document content", () => {
   assert.deepEqual(rotated.unwrapDataKey(wrappedV2, aad), dataKey);
 });
 
+test("isolates profile home keys and AI thread content with distinct AAD", () => {
+  const crypto = new EnvelopeCrypto(keyring());
+  const homeKey = crypto.generateDataKey();
+  const wrapped = crypto.wrapDataKey(homeKey, profileAad("profile-a", "home:dek"));
+  const restored = crypto.unwrapDataKey(
+    wrapped,
+    profileAad("profile-a", "home:dek"),
+  );
+  const encrypted = crypto.encryptText(
+    "private chat",
+    restored,
+    aiThreadAad("thread-a", "message:message-a:content"),
+  );
+
+  assert.equal(
+    crypto.decryptText(
+      encrypted,
+      restored,
+      aiThreadAad("thread-a", "message:message-a:content"),
+    ),
+    "private chat",
+  );
+  assert.throws(
+    () =>
+      crypto.decryptText(
+        encrypted,
+        restored,
+        aiThreadAad("thread-b", "message:message-a:content"),
+      ),
+    CryptoIntegrityError,
+  );
+});

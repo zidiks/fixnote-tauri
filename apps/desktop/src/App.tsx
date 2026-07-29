@@ -94,12 +94,14 @@ export function App() {
     title = kind === 'note' ? 'Untitled note' : 'Untitled board',
     folderId: string | null = null,
     position?: WorkspaceResource['position'],
+    id?: string,
   ) {
     const siblingCount = snapshot.resources.filter(
       (resource) => resource.folderId === folderId,
     ).length;
     const resource = await createResource(
       {
+        ...(id ? { id } : {}),
         kind,
         title,
         folderId,
@@ -113,7 +115,13 @@ export function App() {
     );
     setSnapshot((current) => ({
       ...current,
-      resources: [...current.resources, resource],
+      resources: current.resources.some(
+        (candidate) => candidate.id === resource.id,
+      )
+        ? current.resources.map((candidate) =>
+            candidate.id === resource.id ? resource : candidate,
+          )
+        : [...current.resources, resource],
     }));
     return resource;
   }
@@ -264,7 +272,9 @@ export function App() {
       const created = await addResource(
         'note',
         proposal.title,
-        activeResource?.folderId ?? null,
+        activeResource?.folderId ?? homeFolderId,
+        undefined,
+        proposal.resourceId ?? undefined,
       );
       setScreen({
         kind: 'resource',
@@ -273,8 +283,8 @@ export function App() {
       });
       return;
     }
-    if (proposal.type === 'rename' && activeResource) {
-      await patchResource(activeResource.id, { title: proposal.title });
+    if (proposal.type === 'rename_resource' && proposal.resourceId) {
+      await patchResource(proposal.resourceId, { title: proposal.title });
     }
   }
 

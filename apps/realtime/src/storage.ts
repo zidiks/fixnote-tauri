@@ -5,8 +5,8 @@ import {
   type ResourceKind,
 } from '@fixnote/database';
 import { parseRoomName } from '@fixnote/sync';
+import { indexYjsDocument } from '@fixnote/search';
 import * as Y from 'yjs';
-import { indexDocument } from './indexing.js';
 
 const keyring = createKeyringFromEnv();
 const envelope = new EnvelopeCrypto(keyring);
@@ -124,7 +124,7 @@ export async function storeEncryptedDocument(
   });
 
   try {
-    await indexDocument(resource, document, dataKey);
+    await indexYjsDocument(resource, document, dataKey);
   } catch (error) {
     console.error('Search projection failed', error);
   }

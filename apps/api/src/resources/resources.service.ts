@@ -2,6 +2,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -18,6 +19,7 @@ import {
   ResourceKind as PrismaResourceKind,
   CollaboratorRole as PrismaCollaboratorRole,
 } from '@fixnote/database';
+import { indexResourceTitle } from '@fixnote/search';
 import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { CryptoService } from '../crypto/crypto.service.js';
 import { ProfilesService } from '../profiles/profiles.service.js';
@@ -32,6 +34,8 @@ type ResourceWithAccess = Prisma.ResourceGetPayload<{
 
 @Injectable()
 export class ResourcesService {
+  private readonly logger = new Logger(ResourcesService.name);
+
   constructor(
     @Inject(CryptoService) private readonly crypto: CryptoService,
     @Inject(ProfilesService) private readonly profiles: ProfilesService,
@@ -72,6 +76,20 @@ export class ResourcesService {
 
     if (input.folderId) {
       await this.assertOwnedFolder(profile.id, input.folderId);
+    }
+
+    if (input.id) {
+      const existing = await prisma.resource.findFirst({
+        where: {
+          id: input.id,
+          ownerId: profile.id,
+          deletedAt: null,
+        },
+        include: { key: true, collaborators: true },
+      });
+      if (existing) {
+        return this.toSummary(existing, 'owner');
+      }
     }
 
     const id = input.id ?? crypto.randomUUID();
@@ -118,6 +136,7 @@ export class ResourcesService {
       });
     });
 
+    await this.indexTitle(resource, dataKey);
     return this.toSummary(resource, 'owner');
   }
 
@@ -146,6 +165,9 @@ export class ResourcesService {
     }
 
     const data: Prisma.ResourceUpdateInput = {};
+    let titleIndex:
+      | { dataKey: Buffer; previousTitle: string }
+      | undefined;
 
     if (input.title !== undefined) {
       const dataKey = this.unwrapResourceKey(resource);
@@ -162,6 +184,14 @@ export class ResourcesService {
         ),
       );
       data.titleHash = this.crypto.envelope.hashText(input.title, dataKey);
+      titleIndex = {
+        dataKey,
+        previousTitle: this.crypto.envelope.decryptText(
+          resource.titleCiphertext,
+          dataKey,
+          aad,
+        ),
+      };
     }
 
     if (input.folderId !== undefined) {
@@ -187,6 +217,13 @@ export class ResourcesService {
       include: { key: true, collaborators: true },
     });
 
+    if (titleIndex) {
+      await this.indexTitle(
+        updated,
+        titleIndex.dataKey,
+        titleIndex.previousTitle,
+      );
+    }
     return this.toSummary(updated, role);
   }
 
@@ -484,6 +521,21 @@ export class ResourcesService {
 
     if (!folder) {
       throw new NotFoundException('Folder not found');
+    }
+  }
+
+  private async indexTitle(
+    resource: ResourceWithAccess,
+    dataKey: Buffer,
+    previousTitle?: string,
+  ): Promise<void> {
+    try {
+      await indexResourceTitle(resource, dataKey, previousTitle);
+    } catch (error) {
+      this.logger.error(
+        `Search title projection failed for ${resource.id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
     }
   }
 }

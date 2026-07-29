@@ -2,16 +2,19 @@
   "name": "fixnote",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@9.8.0",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "dev": "pnpm build:packages && pnpm --parallel --filter @fixnote/api --filter @fixnote/realtime --filter @fixnote/desktop dev",
-    "build:packages": "pnpm --filter @fixnote/contracts --filter @fixnote/crypto --filter @fixnote/database --filter @fixnote/sync build",
+    "build:packages": "pnpm --filter @fixnote/contracts --filter @fixnote/crypto --filter @fixnote/database --filter @fixnote/sync --filter @fixnote/search build",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm build:packages && pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
+    "encryption:rewrap": "pnpm --filter @fixnote/api exec tsx ../../scripts/rotate-encryption-key.ts",
+    "search:backfill": "pnpm --filter @fixnote/api exec tsx ../../scripts/backfill-search.ts",
     "db:generate": "pnpm --filter @fixnote/database run generate",
     "db:migrate": "pnpm --filter @fixnote/database run migrate",
     "db:deploy": "pnpm --filter @fixnote/database run deploy",
