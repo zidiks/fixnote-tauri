@@ -34,6 +34,34 @@ export function candidatesFromText(raw: string): ImportCandidate[] {
     : [{ kind: 'text', text }];
 }
 
+export function hasImportPayload(dataTransfer: DataTransfer): boolean {
+  return (
+    dataTransfer.types.includes('Files') ||
+    dataTransfer.types.includes('text/uri-list') ||
+    dataTransfer.types.includes('text/plain')
+  );
+}
+
+export function candidatesFromDataTransfer(
+  dataTransfer: DataTransfer,
+): ImportCandidate[] {
+  const files = Array.from(dataTransfer.files);
+  if (files.length) {
+    return files.map((file) => ({ kind: 'file' as const, file }));
+  }
+
+  const uriList = dataTransfer
+    .getData('text/uri-list')
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter((value) => value && !value.startsWith('#'));
+  if (uriList.length) {
+    return uriList.flatMap(candidatesFromText);
+  }
+
+  return candidatesFromText(dataTransfer.getData('text/plain'));
+}
+
 export async function prepareImport(
   candidate: ImportCandidate,
   loadPreview?: LinkPreviewLoader,

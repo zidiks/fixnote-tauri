@@ -12,14 +12,18 @@ import {
   LoaderCircle,
   PanelRightClose,
   Sparkles,
+  Upload,
   X,
 } from 'lucide-react';
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type DragEvent,
 } from 'react';
-import type { WorkspaceResource } from '../domain';
+import type { ImportCandidate, WorkspaceResource } from '../domain';
+import { candidatesFromText } from '../lib/imports';
 import {
   askAi,
   decideAiProposal,
@@ -35,6 +39,9 @@ interface AIChatProps {
   onOpenChange: (open: boolean) => void;
   onOpenResource: (resourceId: string) => void;
   onApplyProposal: (proposal: AiProposal) => Promise<void>;
+  onImportAndAnalyze: (
+    candidates: ImportCandidate[],
+  ) => Promise<WorkspaceResource[]>;
 }
 
 export function AIChat({
@@ -44,6 +51,7 @@ export function AIChat({
   onOpenChange,
   onOpenResource,
   onApplyProposal,
+  onImportAndAnalyze,
 }: AIChatProps) {
   const [draft, setDraft] = useState('');
   const [messagesByScope, setMessagesByScope] = useState<
@@ -56,6 +64,9 @@ export function AIChat({
   const [loadingScope, setLoadingScope] = useState<string | null>(null);
   const [sendingScope, setSendingScope] = useState<string | null>(null);
   const [busyProposalId, setBusyProposalId] = useState<string | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const dragDepthRef = useRef(0);
   const [errorByScope, setErrorByScope] = useState<
     Record<string, string | null>
   >({});
@@ -121,7 +132,7 @@ export function AIChat({
     }));
   }
 
-  async function send(text = draft) {
+  async function send(text = draft, resourceIdOverride?: string) {
     const value = text.trim();
     if (!value || sending || loading) return;
     const currentScopeKey = scopeKey;
@@ -150,7 +161,7 @@ export function AIChat({
     try {
       const response = await askAi(
         value,
-        scope?.id,
+        resourceIdOverride ?? scope?.id,
         threadIdsByScope[currentScopeKey] ?? undefined,
       );
       setThreadIdsByScope((current) => ({
@@ -180,6 +191,45 @@ export function AIChat({
       setSendingScope((current) =>
         current === currentScopeKey ? null : current,
       );
+    }
+  }
+
+  async function handleDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDropActive(false);
+
+    const resourceId = event.dataTransfer.getData(
+      'application/x-fixnote-resource-id',
+    );
+    if (resourceId) {
+      const resource = resources.find((candidate) => candidate.id === resourceId);
+      if (resource) {
+        await send(
+          `Проанализируй «${resource.title}». Дай краткое резюме, ключевые идеи и следующие шаги.`,
+          resource.id,
+        );
+      }
+      return;
+    }
+
+    const candidates = candidatesFromTransfer(event.dataTransfer);
+    if (!candidates.length || importing) return;
+    setImporting(true);
+    setErrorByScope((current) => ({ ...current, [scopeKey]: null }));
+    try {
+      const created = await onImportAndAnalyze(candidates);
+      const firstCreated = created[0];
+      if (!firstCreated) return;
+      await send(buildImportAnalysisPrompt(created), firstCreated.id);
+    } catch {
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]:
+          'Не удалось сохранить материал из drop. Исходные данные не изменены.',
+      }));
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -243,6 +293,23 @@ export function AIChat({
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: '105%', opacity: 0 }}
           transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+          onDragEnter={(event) => {
+            if (!hasChatDropPayload(event.dataTransfer)) return;
+            event.preventDefault();
+            dragDepthRef.current += 1;
+            setDropActive(true);
+          }}
+          onDragOver={(event) => {
+            if (!hasChatDropPayload(event.dataTransfer)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+          }}
+          onDragLeave={(event) => {
+            if (!hasChatDropPayload(event.dataTransfer)) return;
+            dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+            if (dragDepthRef.current === 0) setDropActive(false);
+          }}
+          onDrop={(event) => void handleDrop(event)}
         >
           <header className="ai-dock-header">
             <div>
@@ -373,10 +440,68 @@ export function AIChat({
               )}
             </button>
           </div>
+
+          {dropActive && (
+            <div className="ai-drop-overlay">
+              <span><Upload size={23} /></span>
+              <strong>Drop to save and analyze</strong>
+              <small>
+                FixNote will create a note first, then pass it to this chat.
+              </small>
+            </div>
+          )}
+
+          {importing && (
+            <div className="ai-importing" role="status">
+              <LoaderCircle className="spin" size={15} />
+              Creating a note and preparing analysis…
+            </div>
+          )}
         </motion.aside>
       )}
     </AnimatePresence>
   );
+}
+
+function hasChatDropPayload(dataTransfer: DataTransfer): boolean {
+  return (
+    dataTransfer.types.includes('application/x-fixnote-resource-id') ||
+    dataTransfer.files.length > 0 ||
+    dataTransfer.types.includes('Files') ||
+    dataTransfer.types.includes('text/plain') ||
+    dataTransfer.types.includes('text/uri-list')
+  );
+}
+
+function candidatesFromTransfer(dataTransfer: DataTransfer): ImportCandidate[] {
+  const files = Array.from(dataTransfer.files);
+  if (files.length) {
+    return files.map((file) => ({ kind: 'file', file }));
+  }
+  const uriList = dataTransfer
+    .getData('text/uri-list')
+    .split(/\r?\n/)
+    .filter((line) => line && !line.startsWith('#'))
+    .join('\n');
+  return candidatesFromText(uriList || dataTransfer.getData('text/plain'));
+}
+
+function buildImportAnalysisPrompt(resources: WorkspaceResource[]): string {
+  const materials = resources
+    .map((resource, index) => {
+      const imported = resource.imported;
+      const source =
+        imported?.kind === 'link'
+          ? imported.url
+          : imported?.kind === 'text'
+            ? imported.text
+            : imported?.kind === 'file' && imported.text
+              ? imported.text
+              : resource.preview;
+      return `${index + 1}. ${resource.title}\n${source.slice(0, 12_000)}`;
+    })
+    .join('\n\n');
+  return `Я добавил в Inbox новые материалы. Проанализируй их: дай краткое резюме, ключевые идеи, возможные связи и следующие шаги.\n\n${materials}`;
 }
 
 function ProposalCard({

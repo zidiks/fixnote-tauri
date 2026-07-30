@@ -36,9 +36,25 @@ interface PlayerDrag {
   moved: boolean;
 }
 
+interface PlayerResize {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  corner: FloatCorner;
+}
+
+interface WorkspaceBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 const FLOAT_WIDTH = 336;
+const FLOAT_MIN_WIDTH = 240;
+const FLOAT_MAX_WIDTH = 640;
 const FLOAT_GAP = 22;
-const FLOAT_BOTTOM = 88;
 
 export function PersistentYoutubePlayer({
   playback,
@@ -51,8 +67,12 @@ export function PersistentYoutubePlayer({
   >(null);
   const playerRef = useRef<HTMLElement>(null);
   const floatCornerRef = useRef<FloatCorner>('bottom-right');
-  const geometryRef = useRef(floatingGeometry(floatCornerRef.current));
+  const floatWidthRef = useRef(FLOAT_WIDTH);
+  const geometryRef = useRef(
+    floatingGeometry(floatCornerRef.current, floatWidthRef.current),
+  );
   const dragRef = useRef<PlayerDrag | null>(null);
+  const resizeRef = useRef<PlayerResize | null>(null);
   const suppressClickRef = useRef(false);
   const transitionTimerRef = useRef<number | null>(null);
 
@@ -78,13 +98,14 @@ export function PersistentYoutubePlayer({
     setTransitioning(false);
 
     const update = () => {
-      if (dragRef.current) {
+      if (dragRef.current || resizeRef.current) {
         frame = window.requestAnimationFrame(update);
         return;
       }
       const next = measurePlayer(
         playback.resourceId,
         floatCornerRef.current,
+        floatWidthRef.current,
       );
       if (firstMeasurement || !sameGeometry(geometryRef.current, next)) {
         const dockChanged = geometryRef.current.docked !== next.docked;
@@ -149,17 +170,24 @@ export function PersistentYoutubePlayer({
     const dy = event.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) >= 4) drag.moved = true;
     const current = geometryRef.current;
+    const bounds = workspaceBounds();
     const next: PlayerGeometry = {
       ...current,
       left: clamp(
         drag.originLeft + dx,
-        FLOAT_GAP,
-        Math.max(FLOAT_GAP, window.innerWidth - current.width - FLOAT_GAP),
+        bounds.left + FLOAT_GAP,
+        Math.max(
+          bounds.left + FLOAT_GAP,
+          bounds.right - current.width - FLOAT_GAP,
+        ),
       ),
       top: clamp(
         drag.originTop + dy,
-        FLOAT_GAP,
-        Math.max(FLOAT_GAP, window.innerHeight - current.height - FLOAT_GAP),
+        bounds.top,
+        Math.max(
+          bounds.top,
+          bounds.bottom - current.height,
+        ),
       ),
       docked: false,
     };
@@ -180,12 +208,68 @@ export function PersistentYoutubePlayer({
 
     event.preventDefault();
     suppressClickRef.current = true;
-    const corner = nearestCorner(geometryRef.current);
+    const bounds = workspaceBounds();
+    const corner = nearestCorner(geometryRef.current, bounds);
     floatCornerRef.current = corner;
-    const next = floatingGeometry(corner);
+    const next = floatingGeometry(corner, floatWidthRef.current, bounds);
     beginTransition(player);
     applyGeometry(player, next);
     geometryRef.current = next;
+  }
+
+  function beginResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (docked || event.button !== 0) return;
+    const player = playerRef.current;
+    if (!player) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: geometryRef.current.width,
+      corner: floatCornerRef.current,
+    };
+    player.classList.remove('is-transitioning');
+    player.classList.add('is-resizing');
+    setTransitioning(false);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    const resize = resizeRef.current;
+    const player = playerRef.current;
+    if (!resize || resize.pointerId !== event.pointerId || !player) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const horizontalDelta = resize.corner.endsWith('left')
+      ? event.clientX - resize.startX
+      : resize.startX - event.clientX;
+    const verticalDelta =
+      (resize.corner.startsWith('top')
+        ? event.clientY - resize.startY
+        : resize.startY - event.clientY) *
+      (16 / 9);
+    const desiredWidth =
+      resize.startWidth + (horizontalDelta + verticalDelta) / 2;
+    const bounds = workspaceBounds();
+    const next = floatingGeometry(resize.corner, desiredWidth, bounds);
+    applyGeometry(player, next);
+    geometryRef.current = next;
+  }
+
+  function endResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    const resize = resizeRef.current;
+    const player = playerRef.current;
+    if (!resize || resize.pointerId !== event.pointerId || !player) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizeRef.current = null;
+    floatWidthRef.current = geometryRef.current.width;
+    player.classList.remove('is-resizing');
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   return (
@@ -215,30 +299,41 @@ export function PersistentYoutubePlayer({
       onContextMenu={(event) => event.preventDefault()}
       aria-label={`Playing ${playback.title}`}
     >
-      <iframe
-        key={playback.videoId}
-        src={`https://www.youtube-nocookie.com/embed/${playback.videoId}?autoplay=1&controls=0&playsinline=1&rel=0`}
-        title={playback.title}
-        allow="autoplay; encrypted-media; picture-in-picture"
-      />
-      <div className="persistent-player-title">
-        <span>Playing</span>
-        <strong>{playback.title}</strong>
+      <div className="persistent-player-surface">
+        <iframe
+          key={playback.videoId}
+          src={`https://www.youtube-nocookie.com/embed/${playback.videoId}?autoplay=1&controls=0&playsinline=1&rel=0`}
+          title={playback.title}
+          allow="autoplay; encrypted-media; picture-in-picture"
+        />
+        <div className="persistent-player-title">
+          <span>Playing</span>
+          <strong>{playback.title}</strong>
+        </div>
+        <button
+          className="persistent-player-close"
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+          aria-label="Stop video"
+        >
+          <X size={14} />
+        </button>
+        <span className="persistent-player-pause" aria-hidden="true">
+          <i />
+          <i />
+        </span>
       </div>
       <button
-        className="persistent-player-close"
-        onClick={(event) => {
-          event.stopPropagation();
-          onClose();
-        }}
-        aria-label="Stop video"
-      >
-        <X size={14} />
-      </button>
-      <span className="persistent-player-pause" aria-hidden="true">
-        <i />
-        <i />
-      </span>
+        className={`persistent-player-resize is-${innerResizeCorner(floatCornerRef.current)}`}
+        onPointerDown={beginResize}
+        onPointerMove={moveResize}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        onClick={(event) => event.stopPropagation()}
+        aria-label="Resize video"
+      />
     </aside>
   );
 }
@@ -246,21 +341,23 @@ export function PersistentYoutubePlayer({
 function measurePlayer(
   resourceId: string,
   floatCorner: FloatCorner,
+  floatWidth: number,
 ): PlayerGeometry {
   const anchor = document.querySelector<HTMLElement>(
     `[data-youtube-anchor="${CSS.escape(resourceId)}"]`,
   );
-  if (!anchor) return floatingGeometry(floatCorner);
+  if (!anchor) return floatingGeometry(floatCorner, floatWidth);
 
   const rect = anchor.getBoundingClientRect();
+  const bounds = workspaceBounds();
   const visible =
     rect.width > 0 &&
     rect.height > 0 &&
-    rect.right > 0 &&
-    rect.bottom > 0 &&
-    rect.left < window.innerWidth &&
-    rect.top < window.innerHeight;
-  if (!visible) return floatingGeometry(floatCorner);
+    rect.left >= bounds.left &&
+    rect.top >= bounds.top &&
+    rect.right <= bounds.right &&
+    rect.bottom <= bounds.bottom;
+  if (!visible) return floatingGeometry(floatCorner, floatWidth, bounds);
 
   const scale = anchor.offsetWidth > 0 ? rect.width / anchor.offsetWidth : 1;
   return {
@@ -273,18 +370,35 @@ function measurePlayer(
   };
 }
 
-function floatingGeometry(corner: FloatCorner): PlayerGeometry {
-  const width = Math.min(FLOAT_WIDTH, Math.max(240, window.innerWidth - 44));
+function floatingGeometry(
+  corner: FloatCorner,
+  desiredWidth: number,
+  bounds = workspaceBounds(),
+): PlayerGeometry {
+  const horizontalRoom = Math.max(
+    160,
+    bounds.right - bounds.left - FLOAT_GAP * 2,
+  );
+  const verticalRoom = Math.max(
+    90,
+    bounds.bottom - bounds.top,
+  );
+  const maximumWidth = Math.max(
+    160,
+    Math.min(FLOAT_MAX_WIDTH, horizontalRoom, verticalRoom * (16 / 9)),
+  );
+  const minimumWidth = Math.min(FLOAT_MIN_WIDTH, maximumWidth);
+  const width = clamp(desiredWidth, minimumWidth, maximumWidth);
   const height = width * (9 / 16);
   const right = corner.endsWith('right');
   const bottom = corner.startsWith('bottom');
   return {
     left: right
-      ? Math.max(FLOAT_GAP, window.innerWidth - width - FLOAT_GAP)
-      : FLOAT_GAP,
+      ? bounds.right - width - FLOAT_GAP
+      : bounds.left + FLOAT_GAP,
     top: bottom
-      ? Math.max(FLOAT_GAP, window.innerHeight - height - FLOAT_BOTTOM)
-      : FLOAT_GAP,
+      ? bounds.bottom - height
+      : bounds.top,
     width,
     height,
     radius: 18,
@@ -292,15 +406,62 @@ function floatingGeometry(corner: FloatCorner): PlayerGeometry {
   };
 }
 
-function nearestCorner(geometry: PlayerGeometry): FloatCorner {
+function nearestCorner(
+  geometry: PlayerGeometry,
+  bounds = workspaceBounds(),
+): FloatCorner {
   const horizontal =
-    geometry.left + geometry.width / 2 < window.innerWidth / 2
+    geometry.left + geometry.width / 2 < (bounds.left + bounds.right) / 2
       ? 'left'
       : 'right';
   const vertical =
-    geometry.top + geometry.height / 2 < window.innerHeight / 2
+    geometry.top + geometry.height / 2 < (bounds.top + bounds.bottom) / 2
       ? 'top'
       : 'bottom';
+  return `${vertical}-${horizontal}`;
+}
+
+function workspaceBounds(): WorkspaceBounds {
+  let left = 0;
+  let top = 48;
+  let right = window.innerWidth;
+  let bottom = window.innerHeight - 10;
+
+  const titlebar = document.querySelector<HTMLElement>('.workspace-titlebar');
+  if (titlebar) {
+    top = Math.max(top, titlebar.getBoundingClientRect().bottom + 8);
+  }
+
+  const sidebar = document.querySelector<HTMLElement>(
+    '.workspace-sidebar-zone.is-visible .workspace-sidebar',
+  );
+  if (sidebar) {
+    const rect = sidebar.getBoundingClientRect();
+    if (rect.right > 0) {
+      left = Math.max(left, rect.right);
+      top = Math.max(top, rect.top);
+      bottom = Math.min(bottom, rect.bottom);
+    }
+  }
+
+  const chat = document.querySelector<HTMLElement>('.ai-dock');
+  if (chat) {
+    const rect = chat.getBoundingClientRect();
+    if (rect.left < window.innerWidth) {
+      right = Math.min(right, rect.left);
+      top = Math.max(top, rect.top);
+      bottom = Math.min(bottom, rect.bottom);
+    }
+  }
+
+  if (right < left) right = left;
+  if (bottom < top) bottom = top;
+  return { left, top, right, bottom };
+}
+
+function innerResizeCorner(corner: FloatCorner): FloatCorner {
+  const vertical = corner.startsWith('top') ? 'bottom' : 'top';
+  const horizontal = corner.endsWith('left') ? 'right' : 'left';
   return `${vertical}-${horizontal}`;
 }
 

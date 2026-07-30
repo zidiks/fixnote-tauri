@@ -17,6 +17,7 @@ import {
 } from 'react';
 import { isMockAuth, supabaseClient } from '../lib/api';
 import { BrandMark } from './BrandMark';
+import { AuthWindowFrame } from './WindowControls';
 
 const OTP_LENGTH = 6;
 const RESEND_SECONDS = 60;
@@ -45,23 +46,33 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (checking) {
     return (
-      <div className="auth-loading">
+      <AuthWindowFrame>
+        <div className="auth-loading">
         <BrandMark className="brand-mark" />
         Restoring encrypted session…
-      </div>
+        </div>
+      </AuthWindowFrame>
     );
   }
   if (isMockAuth) return children;
   if (!supabaseClient) {
     return (
-      <div className="auth-loading auth-config-error">
+      <AuthWindowFrame>
+        <div className="auth-loading auth-config-error">
         <BrandMark className="brand-mark" />
         <strong>Supabase is not configured</strong>
         <small>Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.</small>
-      </div>
+        </div>
+      </AuthWindowFrame>
     );
   }
-  if (!session) return <AuthScreen />;
+  if (!session) {
+    return (
+      <AuthWindowFrame>
+        <AuthScreen />
+      </AuthWindowFrame>
+    );
+  }
   return children;
 }
 

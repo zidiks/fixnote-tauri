@@ -60,6 +60,10 @@ export type ImportCandidate =
   | { kind: 'text'; text: string }
   | { kind: 'file'; file: File };
 
+export type WorkspaceDropTarget =
+  | { kind: 'space' }
+  | { kind: 'folder'; folderId: string };
+
 export interface WorkspaceResource extends ResourceSummary {
   preview: string;
   accent: 'paper' | 'mint' | 'blue' | 'coral' | 'yellow';

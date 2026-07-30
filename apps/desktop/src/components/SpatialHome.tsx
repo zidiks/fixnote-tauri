@@ -7,7 +7,6 @@ import {
   Folder,
   FolderPlus,
   FolderOpen,
-  LayoutDashboard,
   FileArchive,
   FileImage,
   FileVideo,
@@ -17,7 +16,6 @@ import {
   Pencil,
   Plus,
   Search,
-  Settings2,
   Shapes,
   Sparkles,
   Trash2,
@@ -48,6 +46,7 @@ import type {
   ImportedContent,
   ImportedFileType,
   LinkPreviewMetadata,
+  WorkspaceDropTarget,
   WorkspaceResource,
   YoutubePlayback,
 } from '../domain';
@@ -86,6 +85,16 @@ interface SpatialHomeProps {
   onCreateFolder: (name: string, parentId: string | null, position: WorkspaceResource['position']) => Promise<void>;
   onOpenChat: () => void;
   onSignOut: () => Promise<void>;
+  showChrome?: boolean;
+  showAllResources?: boolean;
+  preserveFolderOnMove?: boolean;
+  filterQuery?: string;
+  deleteLabel?: string;
+  onSidebarDragTargetChange?: (target: WorkspaceDropTarget | null) => void;
+  onDropResourceToSidebar?: (
+    resourceId: string,
+    target: WorkspaceDropTarget,
+  ) => Promise<void> | void;
 }
 
 interface Camera {
@@ -126,6 +135,23 @@ function folderPosition(folder: FolderSummary, index: number, local: FolderPosit
     x: snap(position.x),
     y: snap(position.y),
   };
+}
+
+function sidebarDropTargetAt(
+  clientX: number,
+  clientY: number,
+): WorkspaceDropTarget | null {
+  for (const element of document.elementsFromPoint(clientX, clientY)) {
+    const dropTarget = element.closest<HTMLElement>(
+      '[data-sidebar-drop-target]',
+    )?.dataset.sidebarDropTarget;
+    if (dropTarget === 'space') return { kind: 'space' };
+    if (dropTarget?.startsWith('folder:')) {
+      const folderId = dropTarget.slice('folder:'.length);
+      if (folderId) return { kind: 'folder', folderId };
+    }
+  }
+  return null;
 }
 
 interface ResourceContextMenuState {
@@ -193,6 +219,13 @@ export function SpatialHome({
   onCreateFolder,
   onOpenChat,
   onSignOut,
+  showChrome = true,
+  showAllResources = false,
+  preserveFolderOnMove = false,
+  filterQuery,
+  deleteLabel = 'Delete',
+  onSidebarDragTargetChange,
+  onDropResourceToSidebar,
 }: SpatialHomeProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const panRef = useRef<{
@@ -208,6 +241,7 @@ export function SpatialHome({
     scale: 0.9,
   });
   const [query, setQuery] = useState('');
+  const effectiveQuery = filterQuery ?? query;
   const [semanticIds, setSemanticIds] = useState<Set<string>>(new Set());
   const [folderPositions, setFolderPositions] =
     useState<FolderPositions>(loadFolderPositions);
@@ -263,7 +297,7 @@ export function SpatialHome({
   );
 
   useEffect(() => {
-    const normalized = query.trim();
+    const normalized = effectiveQuery.trim();
     if (!normalized) {
       setSemanticIds(new Set());
       return;
@@ -276,7 +310,7 @@ export function SpatialHome({
       });
     }, 220);
     return () => window.clearTimeout(timeout);
-  }, [query]);
+  }, [effectiveQuery]);
 
   useEffect(() => {
     const handlePaste = (event: ClipboardEvent) => {
@@ -303,9 +337,11 @@ export function SpatialHome({
   }, [activeFolder, camera, onImport]);
 
   const visibleResources = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
+    const normalized = effectiveQuery.trim().toLocaleLowerCase();
     return resources.filter((resource) => {
-      const inFolder = activeFolder
+      const inFolder = showAllResources
+        ? true
+        : activeFolder
         ? resource.folderId === activeFolder
         : normalized
           ? true
@@ -318,7 +354,7 @@ export function SpatialHome({
           .includes(normalized);
       return inFolder && matches;
     });
-  }, [activeFolder, query, resources, semanticIds]);
+  }, [activeFolder, effectiveQuery, resources, semanticIds, showAllResources]);
 
   const visibleFolders = useMemo(
     () => folders.filter((folder) => folder.parentId === activeFolder),
@@ -570,7 +606,7 @@ export function SpatialHome({
 
   return (
     <div className="spatial-shell">
-      <header className="spatial-topbar">
+      {showChrome && <header className="spatial-topbar">
         <div className="search-box">
           <Search size={16} />
           <input
@@ -611,7 +647,7 @@ export function SpatialHome({
             )}
           </div>
         </div>
-      </header>
+      </header>}
 
       {activeFolder && (
         <div className="folder-breadcrumb">
@@ -670,9 +706,11 @@ export function SpatialHome({
                   })
                 }
                 onCommit={(position, size) => {
-                    const folderId = homeDropActive
-                      ? null
-                      : dropFolderFor(position, size) ?? activeFolder;
+                    const folderId = preserveFolderOnMove
+                      ? resource.folderId
+                      : homeDropActive
+                        ? null
+                        : dropFolderFor(position, size) ?? activeFolder;
                     setDropTargetId(null);
                     setHomeDropActive(false);
                     setDraggingResource(false);
@@ -682,8 +720,18 @@ export function SpatialHome({
                       folderId,
                     });
                   }}
+                onDropToSidebar={(target) =>
+                  onDropResourceToSidebar?.(resource.id, target)
+                }
                 onDragMove={(position, size, clientX, clientY) => {
                   setDraggingResource(true);
+                  const sidebarTarget = sidebarDropTargetAt(clientX, clientY);
+                  onSidebarDragTargetChange?.(sidebarTarget);
+                  if (sidebarTarget) {
+                    setHomeDropActive(false);
+                    setDropTargetId(null);
+                    return;
+                  }
                   const overHome = activeFolder !== null && isOverHomeDropzone(clientX, clientY);
                   setHomeDropActive(overHome);
                   setDropTargetId(overHome ? null : dropFolderFor(position, size));
@@ -692,6 +740,7 @@ export function SpatialHome({
                   setDropTargetId(null);
                   setHomeDropActive(false);
                   setDraggingResource(false);
+                  onSidebarDragTargetChange?.(null);
                 }}
               />
             ))
@@ -793,6 +842,7 @@ export function SpatialHome({
             setContextMenu(null);
             if (confirmed) void onDelete(contextMenu.resource.id);
           }}
+          deleteLabel={deleteLabel}
         />
       )}
 
@@ -836,18 +886,6 @@ export function SpatialHome({
           }}
         />
       )}
-
-      <nav className="canvas-tools" aria-label="Canvas controls">
-        <button disabled title="Coming soon" aria-label="Overview (coming soon)">
-          <LayoutDashboard size={17} />
-        </button>
-        <button disabled title="Coming soon" aria-label="Folders (coming soon)">
-          <Folder size={17} />
-        </button>
-        <button disabled title="Coming soon" aria-label="Preferences (coming soon)">
-          <Settings2 size={17} />
-        </button>
-      </nav>
 
       <div className="create-cluster">
         <div
@@ -947,6 +985,7 @@ interface ResourceCardProps {
     clientY: number,
   ) => void;
   onDragEnd: () => void;
+  onDropToSidebar?: (target: WorkspaceDropTarget) => Promise<void> | void;
 }
 
 function ResourceCard({
@@ -959,6 +998,7 @@ function ResourceCard({
   onCommit,
   onDragMove,
   onDragEnd,
+  onDropToSidebar,
 }: ResourceCardProps) {
   const [position, setPosition] = useState(resource.position);
   const [size, setSize] = useState(resource.size);
@@ -1043,6 +1083,17 @@ function ResourceCard({
     if (!active.moved && active.type === 'move') {
       activate();
     } else {
+      const sidebarTarget =
+        active.type === 'move'
+          ? sidebarDropTargetAt(event.clientX, event.clientY)
+          : null;
+      if (sidebarTarget && onDropToSidebar) {
+        setPosition(active.position);
+        setSize(active.size);
+        void onDropToSidebar(sidebarTarget);
+        onDragEnd();
+        return;
+      }
       const settledPosition =
         active.type === 'move'
           ? {
@@ -1163,6 +1214,128 @@ function ResourceCard({
       />
     </article>
   );
+}
+
+export function LibraryResourceCard({
+  resource,
+  layout,
+  youtubeActive,
+  onToggleYoutube,
+  onOpen,
+  onOpenMenu,
+}: {
+  resource: WorkspaceResource;
+  layout: 'grid' | 'list';
+  youtubeActive: boolean;
+  onToggleYoutube: (playback: YoutubePlayback) => void;
+  onOpen: () => void;
+  onOpenMenu: (x: number, y: number) => void;
+}) {
+  function activate() {
+    const imported = resource.imported;
+    if (imported?.kind !== 'link') {
+      onOpen();
+      return;
+    }
+    if (imported.linkType === 'youtube') {
+      const videoId =
+        imported.videoId ?? youtubeVideoId(new URL(imported.url));
+      if (videoId) {
+        onToggleYoutube({
+          resourceId: resource.id,
+          videoId,
+          title: resource.title,
+        });
+        return;
+      }
+    }
+    void openExternalUrl(imported.url);
+  }
+
+  return (
+    <article
+      className={`library-resource-card is-${layout} accent-${resource.accent}${resource.kind === 'note' && !resource.imported ? ' is-note' : ''}${resource.imported ? ` is-imported imported-${resource.imported.kind}${resource.imported.kind === 'file' ? ` imported-file-${resource.imported.fileType}` : ''}` : ''}`}
+      draggable
+      data-youtube-anchor={
+        resource.imported?.kind === 'link' &&
+        resource.imported.linkType === 'youtube'
+          ? resource.id
+          : undefined
+      }
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = 'copyMove';
+        event.dataTransfer.setData(
+          'application/x-fixnote-resource-id',
+          resource.id,
+        );
+        event.dataTransfer.setData('text/plain', resource.title);
+      }}
+      onClick={activate}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onOpenMenu(event.clientX, event.clientY);
+      }}
+    >
+      <div className="library-resource-preview">
+        {resource.imported?.kind === 'link' ? (
+          <div className="link-card-clip">
+            <ImportedPreview
+              resource={resource}
+              youtubePlaying={youtubeActive}
+            />
+          </div>
+        ) : resource.imported ? (
+          <ImportedPreview
+            resource={resource}
+            youtubePlaying={youtubeActive}
+          />
+        ) : resource.kind === 'note' ? (
+          <NotePreview resource={resource} />
+        ) : (
+          <>
+            <div className="resource-meta">
+              <span>Board</span>
+              <i />
+            </div>
+            <h2>{resource.title}</h2>
+            <div className="board-preview" aria-hidden="true">
+              <span className="preview-sticky one">Idea</span>
+              <span className="preview-sticky two">Next</span>
+              <span className="preview-line" />
+              <span className="preview-dot a" />
+              <span className="preview-dot b" />
+            </div>
+          </>
+        )}
+      </div>
+      {layout === 'list' && (
+        <div className="library-resource-copy">
+          <span>{resourceTypeLabel(resource)}</span>
+          <strong>{resource.title}</strong>
+          <p>{resource.preview}</p>
+          <time dateTime={resource.updatedAt}>
+            {formatUpdatedAt(resource.updatedAt)}
+          </time>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function resourceTypeLabel(resource: WorkspaceResource): string {
+  if (resource.kind === 'board') return 'Board';
+  if (!resource.imported) return 'Note';
+  if (resource.imported.kind === 'link') {
+    return resource.imported.linkType === 'youtube'
+      ? 'YouTube'
+      : resource.imported.linkType === 'social'
+        ? 'Social link'
+        : 'Link';
+  }
+  if (resource.imported.kind === 'file') {
+    return filePresentation(resource.imported.fileType).label;
+  }
+  return 'Text';
 }
 
 function ImportedPreview({
@@ -1533,11 +1706,13 @@ function ResourceContextMenu({
   onOpen,
   onRename,
   onDelete,
+  deleteLabel,
 }: ResourceContextMenuState & {
   onClose: () => void;
   onOpen: () => void;
   onRename: () => void;
   onDelete: () => void;
+  deleteLabel: string;
 }) {
   return (
     <div
@@ -1559,13 +1734,13 @@ function ResourceContextMenu({
       </button>
       <span className="resource-context-menu-divider" />
       <button className="is-danger" role="menuitem" onClick={onDelete}>
-        <Trash2 size={15} /> Delete
+        <Trash2 size={15} /> {deleteLabel}
       </button>
     </div>
   );
 }
 
-function FolderContextMenu({
+export function FolderContextMenu({
   folder,
   x,
   y,

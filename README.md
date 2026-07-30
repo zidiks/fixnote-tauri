@@ -47,11 +47,25 @@ binary also requires:
 - Visual Studio 2022 Build Tools with **Desktop development with C++**;
 - Microsoft Edge WebView2 Runtime.
 
-After those are installed:
+### Run the native app in development
+
+The native version uses two terminals.
+
+Terminal 1 — build shared packages, then start the API and realtime server:
+
+```powershell
+pnpm build:packages
+pnpm --parallel --filter @fixnote/api --filter @fixnote/realtime dev
+```
+
+Terminal 2 — start the native Tauri app with hot reload:
 
 ```powershell
 pnpm desktop:tauri dev
 ```
+
+`pnpm dev` starts the browser development stack, but does not open the native
+Tauri window.
 
 The project MCP configuration is stored in `.codex/config.toml`. Restart Codex
 after changing it, then authenticate the Supabase server from the MCP settings.
