@@ -127,11 +127,9 @@ export function WorkspaceChrome({
   function createSidebarFolder() {
     const name = window.prompt('Folder name', 'Untitled folder')?.trim();
     if (!name) return;
-    const parentId =
-      activeView?.kind === 'folder' ? activeView.folderId : null;
     setFoldersExpanded(true);
     setFolderSectionMenuOpen(false);
-    void onCreateFolder(name, parentId);
+    void onCreateFolder(name, null);
   }
 
   function targetKey(target: WorkspaceDropTarget) {

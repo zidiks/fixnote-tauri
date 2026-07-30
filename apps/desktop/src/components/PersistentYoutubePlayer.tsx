@@ -183,10 +183,10 @@ export function PersistentYoutubePlayer({
       ),
       top: clamp(
         drag.originTop + dy,
-        bounds.top,
+        bounds.top + FLOAT_GAP,
         Math.max(
-          bounds.top,
-          bounds.bottom - current.height,
+          bounds.top + FLOAT_GAP,
+          bounds.bottom - current.height - FLOAT_GAP,
         ),
       ),
       docked: false,
@@ -381,7 +381,7 @@ function floatingGeometry(
   );
   const verticalRoom = Math.max(
     90,
-    bounds.bottom - bounds.top,
+    bounds.bottom - bounds.top - FLOAT_GAP * 2,
   );
   const maximumWidth = Math.max(
     160,
@@ -397,8 +397,8 @@ function floatingGeometry(
       ? bounds.right - width - FLOAT_GAP
       : bounds.left + FLOAT_GAP,
     top: bottom
-      ? bounds.bottom - height
-      : bounds.top,
+      ? bounds.bottom - height - FLOAT_GAP
+      : bounds.top + FLOAT_GAP,
     width,
     height,
     radius: 18,

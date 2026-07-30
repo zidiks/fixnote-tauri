@@ -518,7 +518,7 @@ export function App() {
         ? activeResources.filter(
             (resource) => resource.folderId === activeView.folderId,
           )
-        : activeResources.filter((resource) => resource.folderId === null);
+        : activeResources;
   const openTabs = openTabIds.flatMap((resourceId) => {
     const resource = activeResources.find(
       (candidate) => candidate.id === resourceId,
@@ -533,9 +533,7 @@ export function App() {
       <WorkspaceChrome
         activeView={activeView}
         folders={snapshot.folders}
-        inboxCount={
-          activeResources.filter((resource) => resource.folderId === null).length
-        }
+        inboxCount={activeResources.length}
         trashCount={trashedResources.length}
         openTabs={openTabs}
         activeTabId={screen.kind === 'resource' ? screen.resourceId : null}

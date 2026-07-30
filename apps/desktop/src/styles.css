@@ -4336,6 +4336,11 @@ b {
   margin: 0 auto 28px;
 }
 
+.library-header.is-inbox {
+  justify-content: flex-end;
+  margin-bottom: 40px;
+}
+
 .library-header h1 {
   margin: 0 0 4px;
   color: #242a26;
@@ -4454,6 +4459,29 @@ b {
   display: grid;
   max-width: 980px;
   margin: 0 auto;
+}
+
+.library-timeline {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.library-date-group + .library-date-group {
+  margin-top: 58px;
+}
+
+.library-date-group > h2 {
+  margin: 0 0 20px;
+  color: #242a26;
+  font-size: 36px;
+  font-weight: 500;
+  letter-spacing: -0.055em;
+  line-height: 1;
+}
+
+.library-timeline .library-resources {
+  max-width: none;
+  margin: 0;
 }
 
 .library-resources.is-grid {

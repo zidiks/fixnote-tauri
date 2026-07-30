@@ -109,6 +109,10 @@ export function LibraryView({
         ),
     [normalizedQuery, resources],
   );
+  const resourceDateGroups = useMemo(
+    () => groupResourcesByCreatedDate(visibleResources),
+    [visibleResources],
+  );
 
   const childFolders = useMemo(() => {
     if (view.kind !== 'folder') return [];
@@ -189,11 +193,15 @@ export function LibraryView({
       onDragLeave={leaveExternalDrag}
       onDrop={finishExternalDrop}
     >
-      <header className="library-header">
-        <div>
-          <h1>{title}</h1>
-          <p>{subtitle}</p>
-        </div>
+      <header
+        className={`library-header${view.kind === 'inbox' ? ' is-inbox' : ''}`}
+      >
+        {view.kind !== 'inbox' && (
+          <div>
+            <h1>{title}</h1>
+            <p>{subtitle}</p>
+          </div>
+        )}
         {!isTrash && (
           <div className="library-create-wrap">
             <button
@@ -267,31 +275,40 @@ export function LibraryView({
         </div>
       )}
 
-      <div className={`library-resources is-${layout}`}>
-        {loading ? (
-          Array.from({ length: 6 }, (_, index) => (
+      {loading ? (
+        <div className={`library-resources is-${layout}`}>
+          {Array.from({ length: 6 }, (_, index) => (
             <div className="library-card-skeleton" key={index} />
-          ))
-        ) : (
-          visibleResources.map((resource) => (
-            <LibraryResourceCard
-              key={resource.id}
-              resource={resource}
-              layout={layout}
-              youtubeActive={activeYoutubeResourceId === resource.id}
-              onToggleYoutube={onToggleYoutube}
-              onOpen={() => onOpen(resource.id)}
-              onOpenMenu={(x, y) =>
-                setMenu({
-                  resource,
-                  x: Math.min(x, window.innerWidth - 210),
-                  y: Math.min(y, window.innerHeight - 220),
-                })
-              }
-            />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="library-timeline">
+          {resourceDateGroups.map((group) => (
+            <section className="library-date-group" key={group.key}>
+              <h2>{group.label}</h2>
+              <div className={`library-resources is-${layout}`}>
+                {group.resources.map((resource) => (
+                  <LibraryResourceCard
+                    key={resource.id}
+                    resource={resource}
+                    layout={layout}
+                    youtubeActive={activeYoutubeResourceId === resource.id}
+                    onToggleYoutube={onToggleYoutube}
+                    onOpen={() => onOpen(resource.id)}
+                    onOpenMenu={(x, y) =>
+                      setMenu({
+                        resource,
+                        x: Math.min(x, window.innerWidth - 210),
+                        y: Math.min(y, window.innerHeight - 220),
+                      })
+                    }
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
 
       {!loading &&
         visibleResources.length === 0 &&
@@ -433,6 +450,58 @@ function hasImportPayload(dataTransfer: DataTransfer): boolean {
     dataTransfer.types.includes('Files') ||
     dataTransfer.types.includes('text/plain') ||
     dataTransfer.types.includes('text/uri-list')
+  );
+}
+
+function groupResourcesByCreatedDate(resources: WorkspaceResource[]): Array<{
+  key: string;
+  label: string;
+  resources: WorkspaceResource[];
+}> {
+  const today = new Date();
+  const todayNumber = localCalendarDayNumber(today);
+  const currentYear = today.getFullYear();
+  const groups = new Map<
+    string,
+    { key: string; label: string; resources: WorkspaceResource[] }
+  >();
+
+  for (const resource of resources) {
+    const createdAt = new Date(resource.createdAt);
+    const key = [
+      createdAt.getFullYear(),
+      String(createdAt.getMonth() + 1).padStart(2, '0'),
+      String(createdAt.getDate()).padStart(2, '0'),
+    ].join('-');
+    const difference = todayNumber - localCalendarDayNumber(createdAt);
+    const label =
+      difference === 0
+        ? 'Сегодня'
+        : difference === 1
+          ? 'Вчера'
+          : new Intl.DateTimeFormat('ru-RU', {
+              day: 'numeric',
+              month: 'long',
+              year:
+                createdAt.getFullYear() === currentYear
+                  ? undefined
+                  : 'numeric',
+            }).format(createdAt);
+    const group = groups.get(key);
+    if (group) {
+      group.resources.push(resource);
+    } else {
+      groups.set(key, { key, label, resources: [resource] });
+    }
+  }
+
+  return Array.from(groups.values());
+}
+
+function localCalendarDayNumber(date: Date): number {
+  return Math.floor(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) /
+      (24 * 60 * 60 * 1000),
   );
 }
 
