@@ -1,18 +1,22 @@
 import type { FolderColor, FolderSummary } from '@fixnote/contracts';
 import {
+  ChevronDown,
+  Ellipsis,
   FileText,
+  Folder,
+  FolderPlus,
   Grid2X2,
   Inbox,
   List,
   LogOut,
   PanelLeft,
+  Plus,
   Search,
   Settings,
   Shapes,
   Sparkles,
   Trash2,
   X,
-  Folder,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -73,6 +77,7 @@ interface WorkspaceChromeProps {
     candidates: ImportCandidate[],
     target: WorkspaceDropTarget,
   ) => Promise<void> | void;
+  onCreateFolder: (name: string, parentId: string | null) => Promise<void>;
   onRenameFolder: (folderId: string, name: string) => Promise<void>;
   onChangeFolderColor: (folderId: string, color: FolderColor) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
@@ -99,6 +104,7 @@ export function WorkspaceChrome({
   onDropResource,
   onDropFolder,
   onImportToTarget,
+  onCreateFolder,
   onRenameFolder,
   onChangeFolderColor,
   onDeleteFolder,
@@ -108,6 +114,8 @@ export function WorkspaceChrome({
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOverride, setSidebarOverride] = useState(false);
+  const [foldersExpanded, setFoldersExpanded] = useState(true);
+  const [folderSectionMenuOpen, setFolderSectionMenuOpen] = useState(false);
   const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<{
     folder: FolderSummary;
@@ -115,6 +123,16 @@ export function WorkspaceChrome({
     y: number;
   } | null>(null);
   const sidebarVisible = sidebarMode === 'fixed' || sidebarOverride;
+
+  function createSidebarFolder() {
+    const name = window.prompt('Folder name', 'Untitled folder')?.trim();
+    if (!name) return;
+    const parentId =
+      activeView?.kind === 'folder' ? activeView.folderId : null;
+    setFoldersExpanded(true);
+    setFolderSectionMenuOpen(false);
+    void onCreateFolder(name, parentId);
+  }
 
   function targetKey(target: WorkspaceDropTarget) {
     return target.kind === 'space' ? 'space' : `folder:${target.folderId}`;
@@ -323,33 +341,99 @@ export function WorkspaceChrome({
           </nav>
 
           <div className="workspace-sidebar-section">
-            <span>Folders</span>
-            <div>
-              {folders
-                .filter((folder) => folder.parentId === null)
-                .map((folder) => (
-                  <FolderBranch
-                    key={folder.id}
-                    folder={folder}
-                    folders={folders}
-                    activeView={activeView}
-                    depth={0}
-                    dropTargetKey={activeDropTargetKey}
-                    onNavigate={onNavigate}
-                    onContinueDrop={continueDrop}
-                    onAcceptDrop={acceptDrop}
-                    onDropLeave={() => setDropTargetKey(null)}
-                    onOpenMenu={(folder, x, y) =>
-                      setFolderMenu({
-                        folder,
-                        x: Math.min(x, window.innerWidth - 204),
-                        y: Math.min(y, window.innerHeight - 230),
-                      })
-                    }
-                  />
-                ))}
-              {folders.length === 0 && <small>No folders yet</small>}
+            <div className="workspace-sidebar-section-header">
+              <button
+                className="workspace-sidebar-section-toggle"
+                onClick={() => setFoldersExpanded((current) => !current)}
+                aria-expanded={foldersExpanded}
+              >
+                <span>Folders</span>
+                <ChevronDown
+                  size={13}
+                  className={foldersExpanded ? 'is-expanded' : ''}
+                />
+              </button>
+              <div
+                className="workspace-sidebar-section-actions"
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setFolderSectionMenuOpen(false);
+                  }
+                }}
+              >
+                <button
+                  onClick={() =>
+                    setFolderSectionMenuOpen((current) => !current)
+                  }
+                  aria-label="Folder section actions"
+                  aria-expanded={folderSectionMenuOpen}
+                >
+                  <Ellipsis size={15} />
+                </button>
+                {folderSectionMenuOpen && (
+                  <div className="workspace-sidebar-section-menu" role="menu">
+                    <button role="menuitem" onClick={createSidebarFolder}>
+                      <FolderPlus size={14} />
+                      <span>New folder</span>
+                    </button>
+                    <button
+                      role="menuitem"
+                      onClick={() => {
+                        setFoldersExpanded((current) => !current);
+                        setFolderSectionMenuOpen(false);
+                      }}
+                    >
+                      <ChevronDown size={14} />
+                      <span>
+                        {foldersExpanded ? 'Collapse section' : 'Expand section'}
+                      </span>
+                    </button>
+                  </div>
+                )}
+                <button
+                  onClick={createSidebarFolder}
+                  aria-label="Create folder"
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
             </div>
+            <AnimatePresence initial={false}>
+              {foldersExpanded && (
+                <motion.div
+                  className="workspace-sidebar-folder-list"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  {folders
+                    .filter((folder) => folder.parentId === null)
+                    .map((folder) => (
+                      <FolderBranch
+                        key={folder.id}
+                        folder={folder}
+                        folders={folders}
+                        activeView={activeView}
+                        depth={0}
+                        dropTargetKey={activeDropTargetKey}
+                        onNavigate={onNavigate}
+                        onContinueDrop={continueDrop}
+                        onAcceptDrop={acceptDrop}
+                        onDropLeave={() => setDropTargetKey(null)}
+                        onOpenMenu={(folder, x, y) =>
+                          setFolderMenu({
+                            folder,
+                            x: Math.min(x, window.innerWidth - 204),
+                            y: Math.min(y, window.innerHeight - 230),
+                          })
+                        }
+                      />
+                    ))}
+                  {folders.length === 0 && <small>No folders yet</small>}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           <nav className="workspace-sidebar-nav workspace-sidebar-bottom">

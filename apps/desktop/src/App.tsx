@@ -551,6 +551,9 @@ export function App() {
         onDropResource={dropResourceIntoSidebar}
         onDropFolder={dropFolderIntoSidebar}
         onImportToTarget={importIntoSidebar}
+        onCreateFolder={(name, parentId) =>
+          addFolder(name, parentId, { x: 180, y: 420 })
+        }
         onRenameFolder={renameFolder}
         onChangeFolderColor={changeFolderColor}
         onDeleteFolder={removeFolderAndNavigate}

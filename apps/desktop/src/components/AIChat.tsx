@@ -10,8 +10,10 @@ import {
   ChevronRight,
   FileText,
   LoaderCircle,
+  Mic,
   PanelRightClose,
   Sparkles,
+  Square,
   Upload,
   X,
 } from 'lucide-react';
@@ -31,6 +33,44 @@ import {
 } from '../lib/api';
 
 export type AiProposal = ContractAiProposal;
+
+type VoiceState = 'idle' | 'recording' | 'processing';
+
+interface BrowserSpeechRecognitionAlternative {
+  transcript: string;
+}
+
+interface BrowserSpeechRecognitionResult {
+  readonly isFinal: boolean;
+  readonly length: number;
+  [index: number]: BrowserSpeechRecognitionAlternative;
+}
+
+interface BrowserSpeechRecognitionEvent {
+  readonly resultIndex: number;
+  readonly results: {
+    readonly length: number;
+    [index: number]: BrowserSpeechRecognitionResult;
+  };
+}
+
+interface BrowserSpeechRecognitionErrorEvent {
+  readonly error: string;
+}
+
+interface BrowserSpeechRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 interface AIChatProps {
   open: boolean;
@@ -70,6 +110,12 @@ export function AIChat({
   const [errorByScope, setErrorByScope] = useState<
     Record<string, string | null>
   >({});
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const voiceTimerRef = useRef<number | null>(null);
+  const voiceTranscriptRef = useRef('');
+  const sendVoiceOnEndRef = useRef(false);
   const scopeKey = scope?.id ?? 'global';
   const messages = messagesByScope[scopeKey] ?? [];
   const loading = loadingScope === scopeKey;
@@ -121,6 +167,26 @@ export function AIChat({
       active = false;
     };
   }, [loadedScopes, open, scope?.id, scopeKey]);
+
+  useEffect(
+    () => () => {
+      recognitionRef.current?.abort();
+      if (voiceTimerRef.current !== null) {
+        window.clearInterval(voiceTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (open || !recognitionRef.current) return;
+    sendVoiceOnEndRef.current = false;
+    recognitionRef.current.abort();
+    recognitionRef.current = null;
+    stopVoiceTimer();
+    setVoiceState('idle');
+    setRecordingSeconds(0);
+  }, [open]);
 
   function setMessages(
     key: string,
@@ -192,6 +258,137 @@ export function AIChat({
         current === currentScopeKey ? null : current,
       );
     }
+  }
+
+  async function startVoiceRecording() {
+    if (loading || sending || voiceState !== 'idle' || draft.trim()) return;
+
+    const SpeechRecognition = getSpeechRecognitionConstructor();
+    if (!SpeechRecognition) {
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]:
+          'Голосовой ввод недоступен в этой версии системы. Обновите WebView2 или воспользуйтесь текстом.',
+      }));
+      return;
+    }
+
+    try {
+      if (navigator.mediaDevices?.getUserMedia) {
+        const permissionStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
+        permissionStream.getTracks().forEach((track) => track.stop());
+      }
+    } catch {
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]:
+          'Нет доступа к микрофону. Разрешите его для FixNote в настройках Windows.',
+      }));
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = navigator.language || 'ru-RU';
+    recognitionRef.current = recognition;
+    voiceTranscriptRef.current = '';
+    sendVoiceOnEndRef.current = false;
+    setDraft('');
+    setRecordingSeconds(0);
+    setErrorByScope((current) => ({ ...current, [scopeKey]: null }));
+
+    recognition.onresult = (event) => {
+      let finalChunk = '';
+      let interimChunk = '';
+
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        if (!result) continue;
+        const transcript = result[0]?.transcript.trim() ?? '';
+        if (!transcript) continue;
+        if (result.isFinal) {
+          finalChunk = `${finalChunk} ${transcript}`.trim();
+        } else {
+          interimChunk = `${interimChunk} ${transcript}`.trim();
+        }
+      }
+
+      if (finalChunk) {
+        voiceTranscriptRef.current =
+          `${voiceTranscriptRef.current} ${finalChunk}`.trim();
+      }
+      setDraft(
+        `${voiceTranscriptRef.current} ${interimChunk}`.trimStart(),
+      );
+    };
+
+    recognition.onerror = (event) => {
+      sendVoiceOnEndRef.current = false;
+      stopVoiceTimer();
+      setVoiceState('idle');
+      setRecordingSeconds(0);
+      if (event.error === 'aborted') return;
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]:
+          event.error === 'not-allowed' || event.error === 'service-not-allowed'
+            ? 'Нет доступа к микрофону. Разрешите его для FixNote в настройках Windows.'
+            : 'Не удалось распознать речь. Попробуйте записать сообщение ещё раз.',
+      }));
+    };
+
+    recognition.onend = () => {
+      stopVoiceTimer();
+      recognitionRef.current = null;
+      const shouldSend = sendVoiceOnEndRef.current;
+      const transcript = voiceTranscriptRef.current.trim();
+      sendVoiceOnEndRef.current = false;
+      setVoiceState('idle');
+      setRecordingSeconds(0);
+
+      if (shouldSend && transcript) {
+        void send(transcript);
+      } else if (shouldSend) {
+        setDraft('');
+        setErrorByScope((current) => ({
+          ...current,
+          [scopeKey]:
+            'Речь не распознана. Попробуйте говорить ближе к микрофону.',
+        }));
+      }
+    };
+
+    try {
+      recognition.start();
+      setVoiceState('recording');
+      const startedAt = Date.now();
+      voiceTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)));
+      }, 250);
+    } catch {
+      recognitionRef.current = null;
+      setVoiceState('idle');
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]: 'Не удалось запустить микрофон. Попробуйте ещё раз.',
+      }));
+    }
+  }
+
+  function finishVoiceRecording() {
+    if (voiceState !== 'recording' || !recognitionRef.current) return;
+    sendVoiceOnEndRef.current = true;
+    setVoiceState('processing');
+    recognitionRef.current.stop();
+  }
+
+  function stopVoiceTimer() {
+    if (voiceTimerRef.current === null) return;
+    window.clearInterval(voiceTimerRef.current);
+    voiceTimerRef.current = null;
   }
 
   async function handleDrop(event: DragEvent<HTMLElement>) {
@@ -405,21 +602,53 @@ export function AIChat({
             )}
           </div>
 
-          <div className="ai-dock-composer">
+          <div className={`ai-dock-composer is-${voiceState}`}>
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (
+                  voiceState === 'idle' &&
+                  event.key === 'Enter' &&
+                  !event.shiftKey
+                ) {
                   event.preventDefault();
                   void send();
                 }
               }}
               rows={1}
-              placeholder="Сообщение или действие…"
+              placeholder={
+                voiceState === 'recording'
+                  ? 'Говорите…'
+                  : voiceState === 'processing'
+                    ? 'Распознаю запись…'
+                    : 'Спросите что-нибудь…'
+              }
+              readOnly={voiceState !== 'idle'}
               disabled={loading || sending}
             />
-            {draft && (
+            {voiceState !== 'idle' && (
+              <div
+                className={`voice-recording-state is-${voiceState}`}
+                aria-live="polite"
+              >
+                <span className="voice-recording-dot" />
+                <span>
+                  {voiceState === 'recording'
+                    ? `Запись ${formatRecordingTime(recordingSeconds)}`
+                    : 'Готовлю сообщение…'}
+                </span>
+                {voiceState === 'recording' && (
+                  <span className="voice-level" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                )}
+              </div>
+            )}
+            {draft && voiceState === 'idle' && (
               <button
                 className="clear-draft"
                 onClick={() => setDraft('')}
@@ -429,14 +658,33 @@ export function AIChat({
               </button>
             )}
             <button
-              className="send-button"
-              onClick={() => void send()}
-              disabled={!draft.trim() || loading || sending}
+              className={`send-button${voiceState === 'recording' ? ' is-recording' : ''}${!draft.trim() && voiceState === 'idle' ? ' is-voice' : ''}`}
+              onClick={() => {
+                if (voiceState === 'recording') {
+                  finishVoiceRecording();
+                } else if (draft.trim()) {
+                  void send();
+                } else {
+                  void startVoiceRecording();
+                }
+              }}
+              disabled={loading || sending || voiceState === 'processing'}
+              aria-label={
+                voiceState === 'recording'
+                  ? 'Завершить запись и отправить'
+                  : draft.trim()
+                    ? 'Отправить сообщение'
+                    : 'Записать голосовое сообщение'
+              }
             >
-              {sending ? (
+              {sending || voiceState === 'processing' ? (
                 <LoaderCircle className="spin" size={17} />
-              ) : (
+              ) : voiceState === 'recording' ? (
+                <Square size={13} fill="currentColor" />
+              ) : draft.trim() ? (
                 <ArrowUp size={17} />
+              ) : (
+                <Mic size={17} />
               )}
             </button>
           </div>
@@ -461,6 +709,26 @@ export function AIChat({
       )}
     </AnimatePresence>
   );
+}
+
+function getSpeechRecognitionConstructor():
+  | BrowserSpeechRecognitionConstructor
+  | null {
+  const speechWindow = window as typeof window & {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  };
+  return (
+    speechWindow.SpeechRecognition ??
+    speechWindow.webkitSpeechRecognition ??
+    null
+  );
+}
+
+function formatRecordingTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}:${remainder.toString().padStart(2, '0')}`;
 }
 
 function hasChatDropPayload(dataTransfer: DataTransfer): boolean {

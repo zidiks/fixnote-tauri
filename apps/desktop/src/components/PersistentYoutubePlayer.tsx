@@ -423,13 +423,17 @@ function nearestCorner(
 
 function workspaceBounds(): WorkspaceBounds {
   let left = 0;
-  let top = 48;
+  let top = 40;
   let right = window.innerWidth;
-  let bottom = window.innerHeight - 10;
+  let bottom = window.innerHeight;
 
-  const titlebar = document.querySelector<HTMLElement>('.workspace-titlebar');
-  if (titlebar) {
-    top = Math.max(top, titlebar.getBoundingClientRect().bottom + 8);
+  const content = document.querySelector<HTMLElement>('.app-content');
+  if (content) {
+    const rect = content.getBoundingClientRect();
+    left = rect.left;
+    top = rect.top;
+    right = rect.right;
+    bottom = rect.bottom;
   }
 
   const sidebar = document.querySelector<HTMLElement>(
@@ -439,8 +443,6 @@ function workspaceBounds(): WorkspaceBounds {
     const rect = sidebar.getBoundingClientRect();
     if (rect.right > 0) {
       left = Math.max(left, rect.right);
-      top = Math.max(top, rect.top);
-      bottom = Math.min(bottom, rect.bottom);
     }
   }
 
@@ -449,8 +451,6 @@ function workspaceBounds(): WorkspaceBounds {
     const rect = chat.getBoundingClientRect();
     if (rect.left < window.innerWidth) {
       right = Math.min(right, rect.left);
-      top = Math.max(top, rect.top);
-      bottom = Math.min(bottom, rect.bottom);
     }
   }
 

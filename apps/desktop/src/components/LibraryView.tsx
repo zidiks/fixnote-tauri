@@ -191,7 +191,6 @@ export function LibraryView({
     >
       <header className="library-header">
         <div>
-          <span>{view.kind === 'folder' ? 'Folder' : 'FixNote'}</span>
           <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
