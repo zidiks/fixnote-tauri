@@ -55,6 +55,12 @@ import { candidatesFromText, youtubeVideoId } from '../lib/imports';
 import { loadLinkPreview } from '../lib/link-preview';
 import { openExternalUrl } from '../lib/open-external';
 import { useImportedAssetUrl } from '../lib/use-imported-asset-url';
+import { AppContextMenu } from './AppContextMenu';
+import {
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+} from './motion/context-menu';
 
 interface SpatialHomeProps {
   loading: boolean;
@@ -1715,28 +1721,28 @@ function ResourceContextMenu({
   deleteLabel: string;
 }) {
   return (
-    <div
-      className="resource-context-menu"
-      role="menu"
-      aria-label={`Actions for ${resource.title}`}
-      style={{ left: x, top: y }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
+    <AppContextMenu
+      x={x}
+      y={y}
+      ariaLabel={`Actions for ${resource.title}`}
+      onClose={onClose}
     >
-      <button role="menuitem" onClick={onOpen}>
+      <ContextMenuLabel>Resource</ContextMenuLabel>
+      <ContextMenuItem textValue="Open" onSelect={onOpen}>
         <ArrowUpRight size={15} /> Open
-      </button>
-      <button role="menuitem" onClick={onRename}>
+      </ContextMenuItem>
+      <ContextMenuItem textValue="Rename" onSelect={onRename}>
         <Pencil size={15} /> Rename
-      </button>
-      <span className="resource-context-menu-divider" />
-      <button className="is-danger" role="menuitem" onClick={onDelete}>
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        tone="destructive"
+        textValue={deleteLabel}
+        onSelect={onDelete}
+      >
         <Trash2 size={15} /> {deleteLabel}
-      </button>
-    </div>
+      </ContextMenuItem>
+    </AppContextMenu>
   );
 }
 
@@ -1757,24 +1763,21 @@ export function FolderContextMenu({
   onDelete: () => void;
 }) {
   return (
-    <div
-      className="resource-context-menu"
-      role="menu"
-      aria-label={`Actions for ${folder.name}`}
-      style={{ left: x, top: y }}
-      onPointerDown={(event) => event.stopPropagation()}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
+    <AppContextMenu
+      x={x}
+      y={y}
+      ariaLabel={`Actions for ${folder.name}`}
+      onClose={onClose}
     >
-      <button role="menuitem" onClick={onOpen}>
+      <ContextMenuLabel>Folder</ContextMenuLabel>
+      <ContextMenuItem textValue="Open" onSelect={onOpen}>
         <ArrowUpRight size={15} /> Open
-      </button>
-      <button role="menuitem" onClick={onRename}>
+      </ContextMenuItem>
+      <ContextMenuItem textValue="Rename" onSelect={onRename}>
         <Pencil size={15} /> Rename
-      </button>
-      <div className="folder-color-picker" aria-label="Folder color">
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <div className="folder-color-picker" aria-label="Folder color choices">
         {FOLDER_COLORS.map(({ value, label }) => (
           <button
             key={value}
@@ -1787,11 +1790,15 @@ export function FolderContextMenu({
           />
         ))}
       </div>
-      <span className="resource-context-menu-divider" />
-      <button className="is-danger" role="menuitem" onClick={onDelete}>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        tone="destructive"
+        textValue="Delete"
+        onSelect={onDelete}
+      >
         <Trash2 size={15} /> Delete
-      </button>
-    </div>
+      </ContextMenuItem>
+    </AppContextMenu>
   );
 }
 

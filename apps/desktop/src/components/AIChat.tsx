@@ -2,7 +2,7 @@ import type {
   AiChatMessage,
   AiProposal as ContractAiProposal,
 } from '@fixnote/contracts';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   ArrowUp,
   Bot,
@@ -31,6 +31,8 @@ import {
   decideAiProposal,
   loadAiThread,
 } from '../lib/api';
+import { AnimatedBadge } from './motion/animated-badge';
+import { Drawer } from './motion/drawer';
 
 export type AiProposal = ContractAiProposal;
 
@@ -482,14 +484,17 @@ export function AIChat({
   }
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.aside
-          className="ai-dock"
-          initial={{ x: '105%', opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: '105%', opacity: 0 }}
-          transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+    <Drawer
+      open={open}
+      onOpenChange={onOpenChange}
+      side="right"
+      modal={false}
+      dismissable={false}
+      ariaLabel="FixNote AI"
+      className="ai-dock"
+    >
+        <div
+          className="ai-dock-inner"
           onDragEnter={(event) => {
             if (!hasChatDropPayload(event.dataTransfer)) return;
             event.preventDefault();
@@ -513,6 +518,13 @@ export function AIChat({
               <strong>FixNote AI</strong>
               <span>{scope ? scope.title : 'Все доступные заметки'}</span>
             </div>
+            <AnimatedBadge
+              status={loading ? 'loading' : 'success'}
+              size="sm"
+              contentKey={loading ? 'loading' : scopeKey}
+            >
+              {loading ? 'Syncing' : scope ? 'Document' : 'Workspace'}
+            </AnimatedBadge>
             <button
               className="icon-button"
               onClick={() => onOpenChange(false)}
@@ -705,9 +717,8 @@ export function AIChat({
               Creating a note and preparing analysis…
             </div>
           )}
-        </motion.aside>
-      )}
-    </AnimatePresence>
+        </div>
+    </Drawer>
   );
 }
 

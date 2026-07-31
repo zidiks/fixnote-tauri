@@ -1,5 +1,7 @@
 import type { FolderColor, FolderSummary } from '@fixnote/contracts';
+import desktopPackage from '../../package.json';
 import {
+  Check,
   ChevronDown,
   Ellipsis,
   FileText,
@@ -11,7 +13,6 @@ import {
   LogOut,
   PanelLeft,
   Plus,
-  Search,
   Settings,
   Shapes,
   Sparkles,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  useEffect,
   useState,
   type CSSProperties,
   type DragEvent,
@@ -34,7 +36,14 @@ import {
   candidatesFromDataTransfer,
   hasImportPayload,
 } from '../lib/imports';
+import { AppModal } from './AppModal';
 import { FolderContextMenu } from './SpatialHome';
+import { Switch } from './motion/switch';
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from './motion/tabs';
 import {
   NativeWindowControls,
   toggleNativeMaximize,
@@ -48,6 +57,16 @@ export type CollectionView =
 
 export type LibraryLayout = 'grid' | 'list';
 export type SidebarMode = 'fixed' | 'auto';
+
+type WorkspaceMenu = 'edit' | 'help';
+type EditCommand =
+  | 'undo'
+  | 'redo'
+  | 'cut'
+  | 'copy'
+  | 'paste'
+  | 'delete'
+  | 'selectAll';
 
 interface WorkspaceChromeProps {
   activeView: CollectionView | null;
@@ -113,6 +132,9 @@ export function WorkspaceChrome({
 }: WorkspaceChromeProps) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [workspaceMenu, setWorkspaceMenu] =
+    useState<WorkspaceMenu | null>(null);
   const [sidebarOverride, setSidebarOverride] = useState(false);
   const [foldersExpanded, setFoldersExpanded] = useState(true);
   const [folderSectionMenuOpen, setFolderSectionMenuOpen] = useState(false);
@@ -123,6 +145,47 @@ export function WorkspaceChrome({
     y: number;
   } | null>(null);
   const sidebarVisible = sidebarMode === 'fixed' || sidebarOverride;
+
+  useEffect(() => {
+    if (!workspaceMenu && !aboutOpen) return;
+
+    const closeMenuFromOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        workspaceMenu &&
+        target instanceof Element &&
+        !target.closest('.workspace-app-menu')
+      ) {
+        setWorkspaceMenu(null);
+      }
+    };
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setWorkspaceMenu(null);
+      setAboutOpen(false);
+    };
+
+    window.addEventListener('pointerdown', closeMenuFromOutside);
+    window.addEventListener('keydown', closeWithEscape);
+    return () => {
+      window.removeEventListener('pointerdown', closeMenuFromOutside);
+      window.removeEventListener('keydown', closeWithEscape);
+    };
+  }, [aboutOpen, workspaceMenu]);
+
+  async function runEditCommand(command: EditCommand) {
+    setWorkspaceMenu(null);
+    if (command === 'paste') {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) document.execCommand('insertText', false, text);
+      } catch {
+        document.execCommand('paste');
+      }
+      return;
+    }
+    document.execCommand(command);
+  }
 
   function createSidebarFolder() {
     const name = window.prompt('Folder name', 'Untitled folder')?.trim();
@@ -215,14 +278,121 @@ export function WorkspaceChrome({
           >
             <PanelLeft size={15} />
           </button>
-          <button
-            className="workspace-search-disabled"
-            disabled
-            aria-label="Search is coming soon"
-            title="Search is coming soon"
-          >
-            <Search size={14} />
-          </button>
+          <nav className="workspace-app-menus" aria-label="Application menu">
+            <div className="workspace-app-menu">
+              <button
+                type="button"
+                className={workspaceMenu === 'edit' ? 'is-open' : ''}
+                aria-haspopup="menu"
+                aria-expanded={workspaceMenu === 'edit'}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() =>
+                  setWorkspaceMenu((current) =>
+                    current === 'edit' ? null : 'edit',
+                  )
+                }
+              >
+                Правка
+              </button>
+              <AnimatePresence>
+                {workspaceMenu === 'edit' && (
+                  <motion.div
+                    className="workspace-native-dropdown workspace-edit-menu"
+                    role="menu"
+                    aria-label="Правка"
+                    initial={{ opacity: 0, y: -5, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                    transition={{ duration: 0.12 }}
+                  >
+                    <EditMenuItem
+                      label="Undo"
+                      shortcut="Ctrl+Z"
+                      onSelect={() => void runEditCommand('undo')}
+                    />
+                    <EditMenuItem
+                      label="Redo"
+                      shortcut="Ctrl+Y"
+                      onSelect={() => void runEditCommand('redo')}
+                    />
+                    <MenuSeparator />
+                    <EditMenuItem
+                      label="Cut"
+                      shortcut="Ctrl+X"
+                      onSelect={() => void runEditCommand('cut')}
+                    />
+                    <EditMenuItem
+                      label="Copy"
+                      shortcut="Ctrl+C"
+                      onSelect={() => void runEditCommand('copy')}
+                    />
+                    <EditMenuItem
+                      label="Paste"
+                      shortcut="Ctrl+V"
+                      onSelect={() => void runEditCommand('paste')}
+                    />
+                    <EditMenuItem
+                      label="Delete"
+                      onSelect={() => void runEditCommand('delete')}
+                    />
+                    <MenuSeparator />
+                    <EditMenuItem
+                      label="Select All"
+                      shortcut="Ctrl+A"
+                      onSelect={() => void runEditCommand('selectAll')}
+                    />
+                    <MenuSeparator />
+                    <EditMenuItem
+                      label="Settings…"
+                      shortcut="Ctrl+,"
+                      onSelect={() => {
+                        setWorkspaceMenu(null);
+                        setSettingsOpen(true);
+                      }}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <div className="workspace-app-menu">
+              <button
+                type="button"
+                className={workspaceMenu === 'help' ? 'is-open' : ''}
+                aria-haspopup="menu"
+                aria-expanded={workspaceMenu === 'help'}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() =>
+                  setWorkspaceMenu((current) =>
+                    current === 'help' ? null : 'help',
+                  )
+                }
+              >
+                Справка
+              </button>
+              <AnimatePresence>
+                {workspaceMenu === 'help' && (
+                  <motion.div
+                    className="workspace-native-dropdown workspace-help-menu"
+                    role="menu"
+                    aria-label="Справка"
+                    initial={{ opacity: 0, y: -5, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                    transition={{ duration: 0.12 }}
+                  >
+                    <EditMenuItem
+                      label="About"
+                      onSelect={() => {
+                        setWorkspaceMenu(null);
+                        setAboutOpen(true);
+                      }}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </nav>
         </div>
 
         <div className="workspace-tabs" aria-label="Open resources">
@@ -481,77 +651,130 @@ export function WorkspaceChrome({
         />
       )}
 
-      <AnimatePresence>
-        {settingsOpen && (
-          <motion.div
-            className="workspace-settings-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onPointerDown={() => setSettingsOpen(false)}
+      <AppModal
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        ariaLabel="Workspace settings"
+        eyebrow="Preferences"
+        title="Shape your workspace."
+        description="Choose how your library is arranged and how the sidebar behaves."
+        className="workspace-settings"
+        footer={
+          <button
+            type="button"
+            className="app-modal-primary-action"
+            onClick={() => setSettingsOpen(false)}
           >
-            <motion.section
-              className="workspace-settings"
-              initial={{ opacity: 0, y: 14, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.98 }}
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <header>
-                <div>
-                  <span>Preferences</span>
-                  <h2>Workspace settings</h2>
-                </div>
-                <button onClick={() => setSettingsOpen(false)} aria-label="Close">
-                  <X size={16} />
-                </button>
-              </header>
-
+            Done
+          </button>
+        }
+      >
+        <div className="workspace-settings-content">
               <SettingsChoice
                 title="Inbox and folders"
                 description="Choose how typed cards are arranged."
               >
-                <button
-                  className={libraryLayout === 'grid' ? 'is-selected' : ''}
-                  onClick={() => onLibraryLayoutChange('grid')}
+                <Tabs
+                  value={libraryLayout}
+                  onValueChange={(value) =>
+                    onLibraryLayoutChange(value as LibraryLayout)
+                  }
+                  variant="segment"
+                  className="workspace-settings-tabs"
                 >
-                  <Grid2X2 size={19} />
-                  <span><strong>Grid</strong><small>Two columns</small></span>
-                </button>
-                <button
-                  className={libraryLayout === 'list' ? 'is-selected' : ''}
-                  onClick={() => onLibraryLayoutChange('list')}
-                >
-                  <List size={19} />
-                  <span><strong>List</strong><small>Compact rows</small></span>
-                </button>
+                  <TabsList>
+                    <TabsTrigger value="grid">
+                      <Grid2X2 size={15} /> Grid
+                    </TabsTrigger>
+                    <TabsTrigger value="list">
+                      <List size={15} /> List
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
               </SettingsChoice>
 
               <SettingsChoice
                 title="Sidebar"
                 description="Keep it visible or reveal it from the left edge."
               >
-                <button
-                  className={sidebarMode === 'fixed' ? 'is-selected' : ''}
-                  onClick={() => onSidebarModeChange('fixed')}
-                >
-                  <PanelLeft size={19} />
-                  <span><strong>Always visible</strong><small>Floating panel</small></span>
-                </button>
-                <button
-                  className={sidebarMode === 'auto' ? 'is-selected' : ''}
-                  onClick={() => onSidebarModeChange('auto')}
-                >
-                  <PanelLeft size={19} />
-                  <span><strong>Auto reveal</strong><small>Hover left edge</small></span>
-                </button>
+                <div className="workspace-settings-toggle">
+                  <span>
+                    <strong>Always visible</strong>
+                    <small>Turn off to reveal it from the left edge.</small>
+                  </span>
+                  <Switch
+                    checked={sidebarMode === 'fixed'}
+                    onCheckedChange={(checked) =>
+                      onSidebarModeChange(checked ? 'fixed' : 'auto')
+                    }
+                    ariaLabel="Keep sidebar visible"
+                  />
+                </div>
               </SettingsChoice>
-            </motion.section>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={aboutOpen}
+        onOpenChange={setAboutOpen}
+        ariaLabel="About FixNote"
+        eyebrow={`FixNote ${desktopPackage.version}`}
+        title="Keep the ideas worth keeping."
+        description="A quiet, local-first place for notes, visual boards, and AI-assisted thinking."
+        className="workspace-about"
+        footer={
+          <button
+            type="button"
+            className="app-modal-primary-action"
+            onClick={() => setAboutOpen(false)}
+          >
+            Done
+          </button>
+        }
+      >
+        <div className="workspace-about-facts">
+          <div>
+            <Check size={15} aria-hidden="true" />
+            <span>Local-first workspace</span>
+          </div>
+          <div>
+            <Check size={15} aria-hidden="true" />
+            <span>Notes and visual boards</span>
+          </div>
+          <div>
+            <Check size={15} aria-hidden="true" />
+            <span>AI-assisted thinking</span>
+          </div>
+        </div>
+      </AppModal>
     </>
   );
+}
+
+function EditMenuItem({
+  label,
+  shortcut,
+  onSelect,
+}: {
+  label: string;
+  shortcut?: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={onSelect}
+    >
+      <span>{label}</span>
+      {shortcut && <kbd>{shortcut}</kbd>}
+    </button>
+  );
+}
+
+function MenuSeparator() {
+  return <div className="workspace-menu-separator" role="separator" />;
 }
 
 function SidebarButton({

@@ -24,6 +24,12 @@ import type {
   YoutubePlayback,
 } from '../domain';
 import { candidatesFromText } from '../lib/imports';
+import { AppContextMenu } from './AppContextMenu';
+import {
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+} from './motion/context-menu';
 import { FolderContextMenu, LibraryResourceCard } from './SpatialHome';
 import type { CollectionView, LibraryLayout } from './WorkspaceChrome';
 
@@ -339,44 +345,50 @@ export function LibraryView({
       )}
 
       {menu && (
-        <div
-          className="resource-context-menu library-context-menu"
-          role="menu"
-          style={{ left: menu.x, top: menu.y }}
-          onPointerDown={(event) => event.stopPropagation()}
+        <AppContextMenu
+          x={menu.x}
+          y={menu.y}
+          ariaLabel={`Actions for ${menu.resource.title}`}
+          onClose={() => setMenu(null)}
+          className="library-context-menu"
         >
-          <button
-            onClick={() => {
+          <ContextMenuLabel>Resource</ContextMenuLabel>
+          <ContextMenuItem
+            textValue="Open"
+            onSelect={() => {
               setMenu(null);
               onOpen(menu.resource.id);
             }}
           >
             <ArrowUpRight size={15} /> Open
-          </button>
+          </ContextMenuItem>
           {!isTrash && (
-            <button
-              onClick={() => {
+            <ContextMenuItem
+              textValue="Add to Space"
+              onSelect={() => {
                 onPinToSpace(menu.resource.id);
                 setMenu(null);
               }}
             >
               <Grid2X2 size={15} /> Add to Space
-            </button>
+            </ContextMenuItem>
           )}
-          <div className="resource-context-menu-divider" />
+          <ContextMenuSeparator />
           {isTrash ? (
             <>
-              <button
-                onClick={() => {
+              <ContextMenuItem
+                textValue="Restore"
+                onSelect={() => {
                   onRestore(menu.resource.id);
                   setMenu(null);
                 }}
               >
                 <RotateCcw size={15} /> Restore
-              </button>
-              <button
-                className="is-danger"
-                onClick={() => {
+              </ContextMenuItem>
+              <ContextMenuItem
+                tone="destructive"
+                textValue="Delete permanently"
+                onSelect={() => {
                   const confirmed = window.confirm(
                     `Delete “${menu.resource.title}” permanently?`,
                   );
@@ -385,20 +397,21 @@ export function LibraryView({
                 }}
               >
                 <Trash2 size={15} /> Delete permanently
-              </button>
+              </ContextMenuItem>
             </>
           ) : (
-            <button
-              className="is-danger"
-              onClick={() => {
+            <ContextMenuItem
+              tone="destructive"
+              textValue="Move to Trash"
+              onSelect={() => {
                 onTrash(menu.resource.id);
                 setMenu(null);
               }}
             >
               <Trash2 size={15} /> Move to Trash
-            </button>
+            </ContextMenuItem>
           )}
-        </div>
+        </AppContextMenu>
       )}
 
       {folderMenu && (

@@ -8,15 +8,12 @@ import {
 } from 'lucide-react';
 import {
   useEffect,
-  useRef,
   useState,
-  type CSSProperties,
-  type ClipboardEvent,
-  type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import { isMockAuth, supabaseClient } from '../lib/api';
 import { BrandMark } from './BrandMark';
+import { OTPInput } from './motion/otp-input';
 import { AuthWindowFrame } from './WindowControls';
 
 const OTP_LENGTH = 6;
@@ -79,13 +76,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
 function AuthScreen() {
   const [step, setStep] = useState<'email' | 'code'>('email');
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState<string[]>(
-    Array.from({ length: OTP_LENGTH }, () => ''),
-  );
+  const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [resendIn, setResendIn] = useState(0);
-  const codeInputs = useRef<Array<HTMLInputElement | null>>([]);
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -112,14 +106,13 @@ function AuthScreen() {
       return;
     }
     setEmail(normalizedEmail);
-    setCode(Array.from({ length: OTP_LENGTH }, () => ''));
+    setCode('');
     setResendIn(RESEND_SECONDS);
     setStep('code');
-    window.setTimeout(() => codeInputs.current[0]?.focus(), 240);
   }
 
   async function verifyCode() {
-    const token = code.join('');
+    const token = code;
     if (!supabaseClient || token.length !== OTP_LENGTH) return;
     setLoading(true);
     setMessage(null);
@@ -131,74 +124,13 @@ function AuthScreen() {
     setLoading(false);
     if (error) {
       setMessage(authErrorMessage(error.message));
-      setCode(Array.from({ length: OTP_LENGTH }, () => ''));
-      window.setTimeout(() => codeInputs.current[0]?.focus(), 0);
+      setCode('');
     }
   }
 
   async function resendCode() {
     if (resendIn > 0 || loading) return;
     await sendCode();
-  }
-
-  function updateCode(index: number, value: string) {
-    const digits = value.replace(/\D/g, '');
-    if (!digits) {
-      setCode((current) =>
-        current.map((digit, digitIndex) => (digitIndex === index ? '' : digit)),
-      );
-      return;
-    }
-    setCode((current) => {
-      const next = [...current];
-      digits
-        .slice(0, OTP_LENGTH - index)
-        .split('')
-        .forEach((digit, offset) => {
-          next[index + offset] = digit;
-        });
-      return next;
-    });
-    const nextIndex = Math.min(index + digits.length, OTP_LENGTH - 1);
-    window.setTimeout(() => codeInputs.current[nextIndex]?.focus(), 0);
-  }
-
-  function handleCodeKeyDown(
-    event: KeyboardEvent<HTMLInputElement>,
-    index: number,
-  ) {
-    if (event.key === 'Backspace' && !code[index] && index > 0) {
-      event.preventDefault();
-      setCode((current) =>
-        current.map((digit, digitIndex) =>
-          digitIndex === index - 1 ? '' : digit,
-        ),
-      );
-      codeInputs.current[index - 1]?.focus();
-    } else if (event.key === 'ArrowLeft' && index > 0) {
-      event.preventDefault();
-      codeInputs.current[index - 1]?.focus();
-    } else if (event.key === 'ArrowRight' && index < OTP_LENGTH - 1) {
-      event.preventDefault();
-      codeInputs.current[index + 1]?.focus();
-    } else if (event.key === 'Enter') {
-      event.preventDefault();
-      void verifyCode();
-    }
-  }
-
-  function pasteCode(event: ClipboardEvent<HTMLDivElement>) {
-    const digits = event.clipboardData
-      .getData('text')
-      .replace(/\D/g, '')
-      .slice(0, OTP_LENGTH);
-    if (!digits) return;
-    event.preventDefault();
-    const next = Array.from({ length: OTP_LENGTH }, (_, index) =>
-      digits[index] ?? '',
-    );
-    setCode(next);
-    codeInputs.current[Math.min(digits.length, OTP_LENGTH) - 1]?.focus();
   }
 
   return (
@@ -288,43 +220,23 @@ function AuthScreen() {
                     We sent a code to <strong>{email}</strong>
                   </p>
                 </div>
-                <div
-                  className="auth-code"
-                  onPaste={pasteCode}
+                <OTPInput
+                  length={OTP_LENGTH}
+                  value={code}
+                  onChange={(value) => {
+                    setCode(value);
+                    setMessage(null);
+                  }}
+                  status={message ? 'error' : 'idle'}
+                  {...(message ? { errorMessage: message } : {})}
+                  autoFocus
                   aria-label="One-time code"
-                  style={
-                    {
-                      '--auth-otp-length': OTP_LENGTH,
-                    } as CSSProperties
-                  }
-                >
-                  {code.map((digit, index) => (
-                    <input
-                      key={index}
-                      ref={(element) => {
-                        codeInputs.current[index] = element;
-                      }}
-                      value={digit}
-                      onChange={(event) =>
-                        updateCode(index, event.target.value)
-                      }
-                      onKeyDown={(event) =>
-                        handleCodeKeyDown(event, index)
-                      }
-                      onFocus={(event) => event.currentTarget.select()}
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength={1}
-                      autoComplete={index === 0 ? 'one-time-code' : 'off'}
-                      aria-label={`Digit ${index + 1}`}
-                    />
-                  ))}
-                </div>
-                <AuthMessage message={message} />
+                  className="auth-code beui-otp"
+                />
                 <button
                   className="auth-submit"
                   onClick={() => void verifyCode()}
-                  disabled={loading || code.some((digit) => !digit)}
+                  disabled={loading || code.length !== OTP_LENGTH}
                 >
                   {loading ? (
                     <LoaderCircle className="spin" size={17} />

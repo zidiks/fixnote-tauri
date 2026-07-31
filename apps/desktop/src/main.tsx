@@ -6,8 +6,13 @@ import './styles.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AuthGate>
-      <App />
-    </AuthGate>
+    <div
+      className="desktop-context-boundary"
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <AuthGate>
+        <App />
+      </AuthGate>
+    </div>
   </StrictMode>,
 );
