@@ -8,20 +8,25 @@ import {
   Folder,
   FolderPlus,
   Grid2X2,
-  Inbox,
   List,
   LogOut,
+  MessageCircle,
+  Mic,
   PanelLeft,
   Plus,
+  Search,
   Settings,
   Shapes,
   Sparkles,
+  TextQuote,
   Trash2,
   X,
+  type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   useEffect,
+  useMemo,
   useState,
   type CSSProperties,
   type DragEvent,
@@ -37,6 +42,11 @@ import {
   hasImportPayload,
 } from '../lib/imports';
 import { AppModal } from './AppModal';
+import { BrandMark } from './BrandMark';
+import {
+  CommandPalette,
+  type CommandItem,
+} from './motion/command-palette';
 import { FolderContextMenu } from './SpatialHome';
 import { Switch } from './motion/switch';
 import {
@@ -50,6 +60,7 @@ import {
 } from './WindowControls';
 
 export type CollectionView =
+  | { kind: 'flow' }
   | { kind: 'space' }
   | { kind: 'inbox' }
   | { kind: 'folder'; folderId: string }
@@ -71,8 +82,7 @@ type EditCommand =
 interface WorkspaceChromeProps {
   activeView: CollectionView | null;
   folders: FolderSummary[];
-  inboxCount: number;
-  trashCount: number;
+  resources: WorkspaceResource[];
   openTabs: WorkspaceResource[];
   activeTabId: string | null;
   libraryLayout: LibraryLayout;
@@ -101,14 +111,14 @@ interface WorkspaceChromeProps {
   onChangeFolderColor: (folderId: string, color: FolderColor) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
   onToggleChat: () => void;
+  onStartVoiceInput: () => void;
   onSignOut: () => Promise<void>;
 }
 
 export function WorkspaceChrome({
   activeView,
   folders,
-  inboxCount,
-  trashCount,
+  resources,
   openTabs,
   activeTabId,
   libraryLayout,
@@ -128,6 +138,7 @@ export function WorkspaceChrome({
   onChangeFolderColor,
   onDeleteFolder,
   onToggleChat,
+  onStartVoiceInput,
   onSignOut,
 }: WorkspaceChromeProps) {
   const [profileOpen, setProfileOpen] = useState(false);
@@ -144,7 +155,61 @@ export function WorkspaceChrome({
     x: number;
     y: number;
   } | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
   const sidebarVisible = sidebarMode === 'fixed' || sidebarOverride;
+
+  const commandItems = useMemo<CommandItem[]>(
+    () => [
+      {
+        id: 'flow',
+        label: 'Flow',
+        group: 'Navigate',
+        hint: '⌘1',
+        icon: MessageCircle,
+        onSelect: () => onNavigate({ kind: 'flow' }),
+      },
+      {
+        id: 'artifacts',
+        label: 'Artifacts',
+        group: 'Navigate',
+        hint: '⌘2',
+        icon: TextQuote,
+        onSelect: () => onNavigate({ kind: 'inbox' }),
+      },
+      {
+        id: 'space',
+        label: 'Space',
+        group: 'Navigate',
+        hint: '⌘3',
+        icon: Grid2X2,
+        onSelect: () => onNavigate({ kind: 'space' }),
+      },
+      {
+        id: 'trash',
+        label: 'Trash',
+        group: 'Navigate',
+        icon: Trash2,
+        onSelect: () => onNavigate({ kind: 'trash' }),
+      },
+      ...resources.slice(0, 36).map((resource) => ({
+        id: `resource:${resource.id}`,
+        label: resource.title,
+        group: 'Artifacts',
+        hint: resource.kind === 'board' ? 'Board' : 'Note',
+        icon: resource.kind === 'board' ? Shapes : FileText,
+        keywords: [resource.preview],
+        onSelect: () => onSelectTab(resource.id),
+      })),
+      {
+        id: 'settings',
+        label: 'Settings',
+        group: 'Workspace',
+        icon: Settings,
+        onSelect: () => setSettingsOpen(true),
+      },
+    ],
+    [onNavigate, onSelectTab, resources],
+  );
 
   useEffect(() => {
     if (!workspaceMenu && !aboutOpen) return;
@@ -425,13 +490,6 @@ export function WorkspaceChrome({
         </div>
 
         <div className="workspace-titlebar-actions">
-          <button
-            className={`workspace-ai-button${chatOpen ? ' is-active' : ''}`}
-            onClick={onToggleChat}
-            aria-expanded={chatOpen}
-          >
-            <Sparkles size={14} /> Ask AI
-          </button>
           <div className="profile-menu-wrap">
             <button
               className="avatar-button"
@@ -487,12 +545,34 @@ export function WorkspaceChrome({
           animate={{ x: sidebarVisible ? 0 : -286, opacity: sidebarVisible ? 1 : 0 }}
           transition={{ type: 'spring', stiffness: 320, damping: 31 }}
         >
+          <div className="workspace-sidebar-brand">
+            <button
+              className="workspace-brand-button"
+              onClick={() => onNavigate({ kind: 'flow' })}
+              aria-label="Open Flow"
+            >
+              <BrandMark />
+              <strong>FixNote</strong>
+            </button>
+            <button
+              className="workspace-search-button"
+              onClick={() => setCommandOpen(true)}
+              aria-label="Search FixNote"
+            >
+              <Search size={16} />
+            </button>
+          </div>
           <nav className="workspace-sidebar-nav" aria-label="Workspace">
             <SidebarButton
+              active={activeView?.kind === 'flow'}
+              icon={MessageCircle}
+              label="Flow"
+              onClick={() => onNavigate({ kind: 'flow' })}
+            />
+            <SidebarButton
               active={activeView?.kind === 'inbox'}
-              icon={Inbox}
-              label="Inbox"
-              count={inboxCount}
+              icon={TextQuote}
+              label="Artifacts"
               onClick={() => onNavigate({ kind: 'inbox' })}
             />
             <SidebarButton
@@ -505,6 +585,12 @@ export function WorkspaceChrome({
               onDragOver={(event) => continueDrop(event, { kind: 'space' })}
               onDragLeave={() => setDropTargetKey(null)}
               onDrop={(event) => acceptDrop(event, { kind: 'space' })}
+            />
+            <SidebarButton
+              active={activeView?.kind === 'trash'}
+              icon={Trash2}
+              label="Trash"
+              onClick={() => onNavigate({ kind: 'trash' })}
             />
           </nav>
 
@@ -604,15 +690,28 @@ export function WorkspaceChrome({
             </AnimatePresence>
           </div>
 
-          <nav className="workspace-sidebar-nav workspace-sidebar-bottom">
-            <SidebarButton
-              active={activeView?.kind === 'trash'}
-              icon={Trash2}
-              label="Trash"
-              count={trashCount}
-              onClick={() => onNavigate({ kind: 'trash' })}
-            />
-          </nav>
+          <AnimatePresence initial={false}>
+            {activeView?.kind !== 'flow' && (
+              <motion.div
+                className="workspace-sidebar-ai-tools"
+                initial={{ opacity: 0, y: 8, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: 'auto' }}
+                exit={{ opacity: 0, y: 8, height: 0 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <button
+                  className={chatOpen ? 'is-active' : ''}
+                  onClick={onToggleChat}
+                  aria-expanded={chatOpen}
+                >
+                  <Sparkles size={14} /> <span>AI Mode</span>
+                </button>
+                <button onClick={onStartVoiceInput} aria-label="Start voice input">
+                  <Mic size={15} /> <span>Voice</span>
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.aside>
       </div>
 
@@ -643,7 +742,7 @@ export function WorkspaceChrome({
           }}
           onDelete={() => {
             const confirmed = window.confirm(
-              `Delete “${folderMenu.folder.name}”? Its items will return to Inbox.`,
+              `Delete “${folderMenu.folder.name}”? Its items will return to Artifacts.`,
             );
             if (confirmed) void onDeleteFolder(folderMenu.folder.id);
             setFolderMenu(null);
@@ -671,7 +770,7 @@ export function WorkspaceChrome({
       >
         <div className="workspace-settings-content">
               <SettingsChoice
-                title="Inbox and folders"
+                title="Artifacts and folders"
                 description="Choose how typed cards are arranged."
               >
                 <Tabs
@@ -747,6 +846,13 @@ export function WorkspaceChrome({
           </div>
         </div>
       </AppModal>
+
+      <CommandPalette
+        items={commandItems}
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+        placeholder="Search artifacts or run a command…"
+      />
     </>
   );
 }
@@ -790,7 +896,7 @@ function SidebarButton({
   onDrop,
 }: {
   active: boolean;
-  icon: typeof Inbox;
+  icon: LucideIcon;
   label: string;
   count?: number;
   dropActive?: boolean;

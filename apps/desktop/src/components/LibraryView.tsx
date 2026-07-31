@@ -150,15 +150,17 @@ export function LibraryView({
 
   const title =
     view.kind === 'inbox'
-      ? 'Inbox'
+      ? 'Artifacts'
       : view.kind === 'trash'
         ? 'Trash'
-        : folders.find((folder) => folder.id === view.folderId)?.name ??
-          'Folder';
+        : view.kind === 'folder'
+          ? folders.find((folder) => folder.id === view.folderId)?.name ??
+            'Folder'
+          : 'Artifacts';
 
   const subtitle =
     view.kind === 'inbox'
-      ? 'Everything new, in chronological order.'
+      ? 'Saved notes, sources, and visual boards.'
       : view.kind === 'trash'
         ? 'Restore items or remove them permanently.'
         : 'A focused collection of notes and sources.';
@@ -202,12 +204,10 @@ export function LibraryView({
       <header
         className={`library-header${view.kind === 'inbox' ? ' is-inbox' : ''}`}
       >
-        {view.kind !== 'inbox' && (
-          <div>
-            <h1>{title}</h1>
-            <p>{subtitle}</p>
-          </div>
-        )}
+        <div>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
+        </div>
         {!isTrash && (
           <div className="library-create-wrap">
             <button
@@ -441,7 +441,7 @@ export function LibraryView({
           }}
           onDelete={() => {
             const confirmed = window.confirm(
-              `Delete “${folderMenu.folder.name}”? Its items will return to Inbox.`,
+              `Delete “${folderMenu.folder.name}”? Its items will return to Artifacts.`,
             );
             if (confirmed) void onDeleteFolder(folderMenu.folder.id);
             setFolderMenu(null);

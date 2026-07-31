@@ -780,7 +780,7 @@ function buildImportAnalysisPrompt(resources: WorkspaceResource[]): string {
       return `${index + 1}. ${resource.title}\n${source.slice(0, 12_000)}`;
     })
     .join('\n\n');
-  return `Я добавил в Inbox новые материалы. Проанализируй их: дай краткое резюме, ключевые идеи, возможные связи и следующие шаги.\n\n${materials}`;
+  return `Я добавил в Artifacts новые материалы. Проанализируй их: дай краткое резюме, ключевые идеи, возможные связи и следующие шаги.\n\n${materials}`;
 }
 
 function ProposalCard({

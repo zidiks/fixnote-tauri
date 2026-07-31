@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import { AIChat, type AiProposal } from './components/AIChat';
+import { FlowChat } from './components/FlowChat';
 import { LibraryView } from './components/LibraryView';
 import { PersistentYoutubePlayer } from './components/PersistentYoutubePlayer';
 import { SpatialHome } from './components/SpatialHome';
@@ -73,9 +74,10 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState<Screen>({
     kind: 'collection',
-    view: { kind: 'space' },
+    view: { kind: 'flow' },
   });
   const [chatOpen, setChatOpen] = useState(false);
+  const [flowVoiceRequestToken, setFlowVoiceRequestToken] = useState(0);
   const [youtubePlayback, setYoutubePlayback] =
     useState<YoutubePlayback | null>(null);
   const [spaceResourceIds, setSpaceResourceIds] = useState<Set<string>>(
@@ -101,7 +103,13 @@ export function App() {
   useEffect(() => {
     void loadWorkspace().then((next) => {
       setSnapshot(next);
-      if (!window.localStorage.getItem(SPACE_IDS_KEY)) {
+      const storedSpaceIds = loadIdSet(SPACE_IDS_KEY);
+      const hasExistingSpaceItems = next.resources.some((resource) =>
+        storedSpaceIds.has(resource.id),
+      );
+      // A stale/empty local preference must not make the whole Space look
+      // empty after resources have been restored from the workspace.
+      if (!hasExistingSpaceItems && next.resources.length) {
         setSpaceResourceIds(new Set(next.resources.map((resource) => resource.id)));
       }
       setLoading(false);
@@ -533,15 +541,17 @@ export function App() {
       <WorkspaceChrome
         activeView={activeView}
         folders={snapshot.folders}
-        inboxCount={activeResources.length}
-        trashCount={trashedResources.length}
+        resources={activeResources}
         openTabs={openTabs}
         activeTabId={screen.kind === 'resource' ? screen.resourceId : null}
         libraryLayout={libraryLayout}
         sidebarMode={sidebarMode}
         chatOpen={chatOpen}
         pointerDropTarget={pointerSidebarDropTarget}
-        onNavigate={(view) => setScreen({ kind: 'collection', view })}
+        onNavigate={(view) => {
+          setScreen({ kind: 'collection', view });
+          if (view.kind === 'flow') setChatOpen(false);
+        }}
         onSelectTab={(resourceId) => openResource(resourceId, activeView)}
         onCloseTab={closeResourceTab}
         onLibraryLayoutChange={setLibraryLayout}
@@ -556,12 +566,32 @@ export function App() {
         onChangeFolderColor={changeFolderColor}
         onDeleteFolder={removeFolderAndNavigate}
         onToggleChat={() => setChatOpen((current) => !current)}
+        onStartVoiceInput={() => {
+          setScreen({ kind: 'collection', view: { kind: 'flow' } });
+          setChatOpen(false);
+          setFlowVoiceRequestToken((current) => current + 1);
+        }}
         onSignOut={signOut}
       />
 
       <motion.main className="app-content">
         <AnimatePresence initial={false} mode="wait">
-          {screen.kind === 'collection' && screen.view.kind === 'space' ? (
+          {screen.kind === 'collection' && screen.view.kind === 'flow' ? (
+            <motion.div
+              key="flow"
+              className="screen-layer"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <FlowChat
+                resources={activeResources}
+                voiceRequestToken={flowVoiceRequestToken}
+                onOpenResource={(resourceId) => openResource(resourceId, { kind: 'flow' })}
+              />
+            </motion.div>
+          ) : screen.kind === 'collection' && screen.view.kind === 'space' ? (
             <motion.div
               key="space"
               className="screen-layer"
@@ -572,7 +602,7 @@ export function App() {
             >
               <SpatialHome
                 loading={loading}
-                folders={[]}
+                folders={snapshot.folders}
                 resources={spaceResources}
                 activeFolder={null}
                 onActiveFolderChange={() => undefined}
@@ -740,22 +770,24 @@ export function App() {
         onClose={() => setYoutubePlayback(null)}
       />
 
-      <AIChat
-        open={chatOpen}
-        scope={activeResource ?? null}
-        resources={activeResources}
-        onOpenChange={setChatOpen}
-        onOpenResource={(resourceId) => openResource(resourceId, activeView)}
-        onApplyProposal={applyAiProposal}
-        onImportAndAnalyze={(candidates) =>
-          importCandidates(
-            candidates,
-            { x: 240, y: 180 },
-            null,
-            false,
-          )
-        }
-      />
+      {activeView.kind !== 'flow' && (
+        <AIChat
+          open={chatOpen}
+          scope={activeResource ?? null}
+          resources={activeResources}
+          onOpenChange={setChatOpen}
+          onOpenResource={(resourceId) => openResource(resourceId, activeView)}
+          onApplyProposal={applyAiProposal}
+          onImportAndAnalyze={(candidates) =>
+            importCandidates(
+              candidates,
+              { x: 240, y: 180 },
+              null,
+              false,
+            )
+          }
+        />
+      )}
     </div>
   );
 }
