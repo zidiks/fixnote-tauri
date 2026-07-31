@@ -142,12 +142,13 @@ export function NoteEditor({
   const importedContentApplied = useRef(false);
   const markerStrokeRef = useRef<MarkerStroke | null>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
-  const imageAssetId =
+  const importedMedia =
     resource.imported?.kind === 'file' &&
-    resource.imported.fileType === 'image'
-      ? resource.imported.assetId
+    (resource.imported.fileType === 'image' ||
+      resource.imported.fileType === 'audio')
+      ? resource.imported
       : null;
-  const imageUrl = useImportedAssetUrl(imageAssetId);
+  const importedMediaUrl = useImportedAssetUrl(importedMedia?.assetId ?? null);
 
   const editor = useEditor(
     {
@@ -435,14 +436,31 @@ export function NoteEditor({
           <i />
           <span>Private note</span>
         </div>
-        {imageAssetId && (
+        {importedMedia?.fileType === 'image' && (
           <figure className="note-imported-image">
-            {imageUrl ? (
-              <img src={imageUrl} alt={resource.title} />
+            {importedMediaUrl ? (
+              <img src={importedMediaUrl} alt={resource.title} />
             ) : (
               <span aria-label="Loading image" />
             )}
           </figure>
+        )}
+        {importedMedia?.fileType === 'audio' && (
+          <div className="note-imported-audio">
+            <div>
+              <strong>Голосовая заметка</strong>
+              <span>
+                {importedMedia.durationSeconds
+                  ? formatAudioDuration(importedMedia.durationSeconds)
+                  : importedMedia.name}
+              </span>
+            </div>
+            {importedMediaUrl ? (
+              <audio controls preload="metadata" src={importedMediaUrl} />
+            ) : (
+              <span className="note-audio-loading">Загружаю аудио…</span>
+            )}
+          </div>
         )}
         <EditorContent editor={editor} />
       </main>
@@ -681,6 +699,10 @@ function textFromImport(resource: WorkspaceResource): string | null {
   if (imported.kind === 'text') return imported.text;
   if (imported.kind === 'link') return imported.url;
   return imported.text ?? null;
+}
+
+function formatAudioDuration(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
 function SelectionToolbar({

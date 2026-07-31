@@ -8,6 +8,32 @@ test('detects a create-note proposal and keeps quoted title', () => {
     {
       type: 'create_note',
       title: 'План релиза',
+      content: null,
+      summary: null,
+    },
+  );
+});
+
+test('turns captured voice text into a note draft', () => {
+  assert.deepEqual(
+    detectAiProposal('Обсудить план релиза с командой', undefined, true),
+    {
+      type: 'create_note',
+      title: 'Новая мысль из AI-чата',
+      content: 'Обсудить план релиза с командой',
+      summary: null,
+    },
+  );
+});
+
+test('keeps note body separate from an explicit quoted title', () => {
+  assert.deepEqual(
+    detectAiProposal('Создай заметку «План релиза»:\n- Проверить CI\n- Выпустить сборку'),
+    {
+      type: 'create_note',
+      title: 'План релиза',
+      content: '- Проверить CI\n- Выпустить сборку',
+      summary: null,
     },
   );
 });

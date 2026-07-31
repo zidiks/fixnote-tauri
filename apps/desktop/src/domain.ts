@@ -53,6 +53,7 @@ export type ImportedContent =
       byteLength: number;
       fileType: ImportedFileType;
       text?: string;
+      durationSeconds?: number;
     };
 
 export type ImportCandidate =

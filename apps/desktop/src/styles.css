@@ -2385,16 +2385,16 @@ b {
 
 .ai-message {
   position: relative;
-  max-width: 86%;
+  max-width: 94%;
+  align-self: flex-start;
   color: #3b423e;
   font-size: 12px;
   line-height: 1.5;
 }
 
 .ai-message.user {
-  align-self: flex-end;
   padding: 9px 12px;
-  border-radius: 17px 17px 5px 17px;
+  border-radius: 17px 17px 17px 5px;
   background: #eff0ed;
   color: #303632;
 }
@@ -2410,6 +2410,17 @@ b {
 
 .ai-message p {
   margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-message-time {
+  display: block;
+  margin-top: 5px;
+  color: #a0a6a2;
+  font-size: 9px;
+  line-height: 1;
+  text-align: right;
 }
 
 .assistant-dot {
@@ -2525,6 +2536,20 @@ b {
   color: #8b918d !important;
 }
 
+.proposal-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #e1e8e2;
+  color: #41604f;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .ai-thinking {
   display: inline-flex;
   min-height: 20px;
@@ -2593,6 +2618,34 @@ b {
 
 .ai-dock-composer textarea:disabled {
   color: #8a918c;
+}
+
+.ai-file-input {
+  display: none;
+}
+
+.attach-button {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f0f1ee;
+  color: #69716c;
+  cursor: pointer;
+}
+
+.attach-button:hover {
+  background: #e8eae6;
+  color: #303632;
+}
+
+.attach-button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .ai-dock-composer .send-button {
@@ -2899,6 +2952,29 @@ b {
   background-size: 220% 100%;
   animation: image-preview-loading 1.2s ease-in-out infinite;
 }
+
+.note-imported-audio {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 42px;
+  padding: 16px 18px;
+  border: 1px solid rgba(43, 54, 47, 0.08);
+  border-radius: 18px;
+  background: #eef3ef;
+}
+
+.note-imported-audio > div {
+  display: flex;
+  min-width: 130px;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.note-imported-audio strong { color: #39453e; font-size: 12px; }
+.note-imported-audio span { color: #79847d; font-size: 10px; }
+.note-imported-audio audio { min-width: 0; flex: 1; height: 38px; }
+.note-audio-loading { margin-left: auto; }
 
 .note-prose {
   min-height: 420px;
@@ -4184,9 +4260,9 @@ b {
 .flow-messages { display: flex; flex-direction: column; gap: 14px; margin-top: 46px; }
 .flow-thread-loading { display: inline-flex; align-self: center; align-items: center; gap: 8px; color: #858d88; font-size: 12px; }
 .flow-thread-loading svg { animation: spin .8s linear infinite; }
-.flow-message { position: relative; max-width: min(86%, 580px); color: #333a35; font-size: 13px; line-height: 1.55; }
-.flow-message p { margin: 0; }
-.flow-message.user { align-self: flex-end; padding: 11px 14px; border-radius: 18px 18px 5px 18px; background: #e9eeea; }
+.flow-message { position: relative; max-width: min(92%, 620px); align-self: flex-start; color: #333a35; font-size: 13px; line-height: 1.55; }
+.flow-message p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.flow-message.user { padding: 11px 14px; border-radius: 18px 18px 18px 5px; background: #e9eeea; }
 .flow-message.assistant { align-self: flex-start; padding: 12px 15px; border: 1px solid rgba(40, 47, 42, 0.055); border-radius: 18px 18px 18px 5px; background: rgba(255,255,255,.88); box-shadow: 0 8px 24px rgba(36, 44, 39, 0.04); }
 .flow-assistant-mark { display: inline-grid; width: 23px; height: 23px; margin: 0 0 8px; place-items: center; border-radius: 8px; background: #edf1ed; color: #56645b; }
 .flow-citation { display: flex; width: 100%; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 9px; border: 1px solid rgba(43,49,45,.09); border-radius: 10px; background: white; color: #59615c; cursor: pointer; text-align: left; }
@@ -4195,13 +4271,14 @@ b {
 .flow-thinking > span { width: 5px; height: 5px; border-radius: 50%; animation: ai-pulse 1.05s ease-in-out infinite; background: #929b95; }
 .flow-thinking > span:nth-child(2) { animation-delay: .12s; }.flow-thinking > span:nth-child(3) { animation-delay: .24s; }
 .flow-chat-error { align-self: center; padding: 9px 11px; border: 1px solid rgba(174,87,72,.18); border-radius: 10px; background: rgba(255,240,235,.74); color: #9b584d; font-size: 11px; }
+.flow-message-time { display: block; margin-top: 6px; color: #a0a6a2; font-size: 9px; line-height: 1; text-align: right; }
 
 .flow-composer {
   position: relative;
   width: min(760px, calc(100% - 48px));
   min-height: 78px;
   margin: 0 auto 24px;
-  padding: 16px 54px 27px 16px;
+  padding: 16px 54px 44px 16px;
   border: 1px solid rgba(39,45,41,.1);
   border-radius: 20px;
   background: rgba(255,255,255,.9);
@@ -4213,11 +4290,14 @@ b {
 .flow-composer.is-recording { border-color: rgba(210,84,90,.26); background: #fffafa; }
 .flow-send { position: absolute; right: 11px; bottom: 11px; display: grid; width: 37px; height: 37px; place-items: center; border-radius: 50%; background: #28312b; color: white; cursor: pointer; }
 .flow-send:hover { background: #1c241f; }.flow-send.is-voice { background: #eef0ed; color: #505953; }.flow-send.is-recording { background: #d95f64; }.flow-send:disabled { cursor: default; opacity: .7; }
+.flow-attach { position: absolute; bottom: 13px; left: 12px; display: grid; width: 33px; height: 33px; place-items: center; border-radius: 50%; background: #f0f1ee; color: #69716c; cursor: pointer; }
+.flow-attach:hover { background: #e7eae6; color: #303632; }.flow-attach:disabled { cursor: default; opacity: .5; }
 .flow-clear { position: absolute; right: 55px; bottom: 21px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: #f0f1ee; color: #737a75; cursor: pointer; }
 .flow-recording { position: absolute; bottom: 9px; left: 16px; display: inline-flex; align-items: center; gap: 7px; color: #a84d52; font-size: 10px; font-weight: 500; }.flow-recording i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }.flow-recording span { letter-spacing: 1px; }
 
 .flow-message.is-voice { padding: 8px 10px; min-width: 270px; background: #e9eeea; }
 .voice-message { display: flex; align-items: center; gap: 9px; color: #56615a; }.voice-message-time { font-size: 10px; font-variant-numeric: tabular-nums; }.voice-wave { display: flex; height: 32px; flex: 1; align-items: center; gap: 2px; }.voice-wave i { display: block; width: 3px; min-height: 4px; border-radius: 3px; background: #aab5ad; }.voice-message button { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 50%; background: #263029; color: white; cursor: pointer; }
+.voice-message audio { display: none; }.voice-message button:disabled { cursor: default; opacity: .35; }
 
 .workspace-titlebar-actions {
   display: flex;

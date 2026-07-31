@@ -157,6 +157,9 @@ export const aiChatRequestSchema = z.object({
   message: z.string().trim().min(1).max(8000),
   resourceId: z.string().uuid().optional(),
   threadId: z.string().uuid().optional(),
+  context: z.string().trim().min(1).max(60_000).optional(),
+  contextCitations: searchResultSchema.array().max(20).optional(),
+  intent: z.enum(["chat", "capture"]).optional(),
 });
 export type AiChatRequest = z.infer<typeof aiChatRequestSchema>;
 
@@ -179,6 +182,8 @@ export const aiProposalSchema = z.object({
   type: aiProposalTypeSchema,
   title: z.string().trim().min(1).max(240),
   resourceId: z.string().uuid().nullable(),
+  content: z.string().max(20_000).nullable(),
+  summary: z.string().max(4000).nullable(),
   status: aiProposalStatusSchema,
 });
 export type AiProposal = z.infer<typeof aiProposalSchema>;
@@ -216,6 +221,13 @@ export const aiProposalDecisionResultSchema = z.object({
 });
 export type AiProposalDecisionResult = z.infer<
   typeof aiProposalDecisionResultSchema
+>;
+
+export const aiTranscriptionResultSchema = z.object({
+  text: z.string().trim().min(1),
+});
+export type AiTranscriptionResult = z.infer<
+  typeof aiTranscriptionResultSchema
 >;
 
 export const aiActionTypeSchema = z.enum([

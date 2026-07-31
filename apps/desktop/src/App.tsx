@@ -424,12 +424,71 @@ export function App() {
         undefined,
         proposal.resourceId ?? undefined,
       );
-      openResource(created.id, activeView);
-      return;
+      let appliedResource = created;
+      if (proposal.content) {
+        const content = proposal.content;
+        const previewSource = proposal.summary || content;
+        const enriched: WorkspaceResource = {
+          ...created,
+          imported: { kind: 'text', text: content },
+          preview:
+            previewSource.length > 520
+              ? `${previewSource.slice(0, 517).trimEnd()}…`
+              : previewSource,
+          accent: 'yellow',
+        };
+        setSnapshot((current) => ({
+          ...current,
+          resources: current.resources.map((resource) =>
+            resource.id === enriched.id ? enriched : resource,
+          ),
+        }));
+        appliedResource = enriched;
+      }
+      return appliedResource;
     }
     if (proposal.type === 'rename_resource' && proposal.resourceId) {
       await patchResource(proposal.resourceId, { title: proposal.title });
+      return snapshot.resources.find(
+        (resource) => resource.id === proposal.resourceId,
+      );
     }
+  }
+
+  async function attachVoiceToResource(
+    resourceId: string,
+    audio: Blob,
+    transcript: string,
+    durationSeconds: number,
+  ) {
+    const assetId = crypto.randomUUID();
+    const extension = audio.type.includes('ogg') ? 'ogg' : 'webm';
+    const name = `voice-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`;
+    const file = new File([audio], name, {
+      type: audio.type || 'audio/webm',
+    });
+    await saveImportedAsset(assetId, file);
+    setSnapshot((current) => ({
+      ...current,
+      resources: current.resources.map((resource) =>
+        resource.id === resourceId
+          ? {
+              ...resource,
+              imported: {
+                kind: 'file',
+                assetId,
+                name,
+                mimeType: file.type,
+                byteLength: file.size,
+                fileType: 'audio',
+                text: transcript,
+                durationSeconds,
+              },
+              accent: 'mint',
+            }
+          : resource,
+      ),
+    }));
   }
 
   function pinResourceToSpace(resourceId: string) {
@@ -589,6 +648,16 @@ export function App() {
                 resources={activeResources}
                 voiceRequestToken={flowVoiceRequestToken}
                 onOpenResource={(resourceId) => openResource(resourceId, { kind: 'flow' })}
+                onApplyProposal={applyAiProposal}
+                onAttachVoice={attachVoiceToResource}
+                onImportAndAnalyze={(candidates) =>
+                  importCandidates(
+                    candidates,
+                    { x: 240, y: 180 },
+                    null,
+                    false,
+                  )
+                }
               />
             </motion.div>
           ) : screen.kind === 'collection' && screen.view.kind === 'space' ? (
@@ -778,6 +847,7 @@ export function App() {
           onOpenChange={setChatOpen}
           onOpenResource={(resourceId) => openResource(resourceId, activeView)}
           onApplyProposal={applyAiProposal}
+          onAttachVoice={attachVoiceToResource}
           onImportAndAnalyze={(candidates) =>
             importCandidates(
               candidates,

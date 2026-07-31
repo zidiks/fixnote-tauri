@@ -6,11 +6,11 @@ import { motion } from 'framer-motion';
 import {
   ArrowUp,
   Bot,
-  Check,
   ChevronRight,
   FileText,
   LoaderCircle,
   Mic,
+  Paperclip,
   PanelRightClose,
   Sparkles,
   Square,
@@ -30,6 +30,7 @@ import {
   askAi,
   decideAiProposal,
   loadAiThread,
+  transcribeAudio,
 } from '../lib/api';
 import { AnimatedBadge } from './motion/animated-badge';
 import { Drawer } from './motion/drawer';
@@ -37,6 +38,14 @@ import { Drawer } from './motion/drawer';
 export type AiProposal = ContractAiProposal;
 
 type VoiceState = 'idle' | 'recording' | 'processing';
+
+interface SendOptions {
+  context?: string;
+  contextCitations?: AiChatMessage['citations'];
+  intent?: 'chat' | 'capture';
+  voiceAudio?: Blob;
+  voiceDuration?: number;
+}
 
 interface BrowserSpeechRecognitionAlternative {
   transcript: string;
@@ -80,7 +89,15 @@ interface AIChatProps {
   resources: WorkspaceResource[];
   onOpenChange: (open: boolean) => void;
   onOpenResource: (resourceId: string) => void;
-  onApplyProposal: (proposal: AiProposal) => Promise<void>;
+  onApplyProposal: (
+    proposal: AiProposal,
+  ) => Promise<WorkspaceResource | void>;
+  onAttachVoice: (
+    resourceId: string,
+    audio: Blob,
+    transcript: string,
+    durationSeconds: number,
+  ) => Promise<void>;
   onImportAndAnalyze: (
     candidates: ImportCandidate[],
   ) => Promise<WorkspaceResource[]>;
@@ -93,6 +110,7 @@ export function AIChat({
   onOpenChange,
   onOpenResource,
   onApplyProposal,
+  onAttachVoice,
   onImportAndAnalyze,
 }: AIChatProps) {
   const [draft, setDraft] = useState('');
@@ -109,12 +127,24 @@ export function AIChat({
   const [dropActive, setDropActive] = useState(false);
   const [importing, setImporting] = useState(false);
   const dragDepthRef = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [errorByScope, setErrorByScope] = useState<
     Record<string, string | null>
   >({});
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const discardRecordingRef = useRef(false);
+  const recordingDurationRef = useRef(0);
+  const voiceCaptureByProposalRef = useRef<Map<string, {
+    audio: Blob;
+    transcript: string;
+    duration: number;
+  }>>(new Map());
   const voiceTimerRef = useRef<number | null>(null);
   const voiceTranscriptRef = useRef('');
   const sendVoiceOnEndRef = useRef(false);
@@ -172,7 +202,12 @@ export function AIChat({
 
   useEffect(
     () => () => {
+      discardRecordingRef.current = true;
       recognitionRef.current?.abort();
+      if (mediaRecorderRef.current?.state !== 'inactive') {
+        mediaRecorderRef.current?.stop();
+      }
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
       if (voiceTimerRef.current !== null) {
         window.clearInterval(voiceTimerRef.current);
       }
@@ -181,14 +216,29 @@ export function AIChat({
   );
 
   useEffect(() => {
-    if (open || !recognitionRef.current) return;
+    if (open) return;
+    discardRecordingRef.current = true;
     sendVoiceOnEndRef.current = false;
-    recognitionRef.current.abort();
+    recognitionRef.current?.abort();
     recognitionRef.current = null;
+    if (mediaRecorderRef.current?.state !== 'inactive') {
+      mediaRecorderRef.current?.stop();
+    }
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
     stopVoiceTimer();
     setVoiceState('idle');
     setRecordingSeconds(0);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    messagesEndRef.current?.scrollIntoView({
+      behavior: sending || importing ? 'smooth' : 'auto',
+      block: 'end',
+    });
+  }, [importing, loading, messages.length, open, sending]);
 
   function setMessages(
     key: string,
@@ -200,7 +250,7 @@ export function AIChat({
     }));
   }
 
-  async function send(text = draft, resourceIdOverride?: string) {
+  async function send(text = draft, options: SendOptions = {}) {
     const value = text.trim();
     if (!value || sending || loading) return;
     const currentScopeKey = scopeKey;
@@ -229,9 +279,22 @@ export function AIChat({
     try {
       const response = await askAi(
         value,
-        resourceIdOverride ?? scope?.id,
+        scope?.id,
         threadIdsByScope[currentScopeKey] ?? undefined,
+        options.context,
+        options.intent,
+        options.contextCitations,
       );
+      if (options.voiceAudio && response.assistantMessage.proposal) {
+        voiceCaptureByProposalRef.current.set(
+          response.assistantMessage.proposal.id,
+          {
+            audio: options.voiceAudio,
+            transcript: value,
+            duration: Math.max(1, options.voiceDuration ?? 1),
+          },
+        );
+      }
       setThreadIdsByScope((current) => ({
         ...current,
         [currentScopeKey]: response.threadId,
@@ -264,6 +327,25 @@ export function AIChat({
 
   async function startVoiceRecording() {
     if (loading || sending || voiceState !== 'idle' || draft.trim()) return;
+    let permissionStream: MediaStream;
+    try {
+      permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+    } catch {
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]:
+          'Нет доступа к микрофону. Разрешите его для FixNote в настройках Windows.',
+      }));
+      return;
+    }
+
+    if (typeof MediaRecorder !== 'undefined') {
+      startMediaRecording(permissionStream);
+      return;
+    }
+    permissionStream.getTracks().forEach((track) => track.stop());
 
     const SpeechRecognition = getSpeechRecognitionConstructor();
     if (!SpeechRecognition) {
@@ -271,22 +353,6 @@ export function AIChat({
         ...current,
         [scopeKey]:
           'Голосовой ввод недоступен в этой версии системы. Обновите WebView2 или воспользуйтесь текстом.',
-      }));
-      return;
-    }
-
-    try {
-      if (navigator.mediaDevices?.getUserMedia) {
-        const permissionStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
-        permissionStream.getTracks().forEach((track) => track.stop());
-      }
-    } catch {
-      setErrorByScope((current) => ({
-        ...current,
-        [scopeKey]:
-          'Нет доступа к микрофону. Разрешите его для FixNote в настройках Windows.',
       }));
       return;
     }
@@ -352,7 +418,7 @@ export function AIChat({
       setRecordingSeconds(0);
 
       if (shouldSend && transcript) {
-        void send(transcript);
+        void send(transcript, { intent: 'capture' });
       } else if (shouldSend) {
         setDraft('');
         setErrorByScope((current) => ({
@@ -380,8 +446,112 @@ export function AIChat({
     }
   }
 
+  function startMediaRecording(stream: MediaStream) {
+    const mimeType = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+    ].find((candidate) => MediaRecorder.isTypeSupported(candidate));
+    const recorder = new MediaRecorder(
+      stream,
+      mimeType ? { mimeType } : undefined,
+    );
+    discardRecordingRef.current = false;
+    voiceChunksRef.current = [];
+    mediaRecorderRef.current = recorder;
+    mediaStreamRef.current = stream;
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) voiceChunksRef.current.push(event.data);
+    };
+    recorder.onerror = () => {
+      discardRecordingRef.current = true;
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]: 'Не удалось записать аудио. Попробуйте ещё раз.',
+      }));
+    };
+    recorder.onstop = () => {
+      const discarded = discardRecordingRef.current;
+      const chunks = voiceChunksRef.current;
+      const duration = Math.max(1, recordingDurationRef.current);
+      const recordedType = recorder.mimeType || mimeType || 'audio/webm';
+      voiceChunksRef.current = [];
+      mediaRecorderRef.current = null;
+      stream.getTracks().forEach((track) => track.stop());
+      if (mediaStreamRef.current === stream) mediaStreamRef.current = null;
+      stopVoiceTimer();
+      setRecordingSeconds(0);
+
+      if (discarded) {
+        setVoiceState('idle');
+        return;
+      }
+      const audio = new Blob(chunks, { type: recordedType });
+      if (!audio.size) {
+        setVoiceState('idle');
+        setErrorByScope((current) => ({
+          ...current,
+          [scopeKey]: 'Запись получилась пустой. Попробуйте ещё раз.',
+        }));
+        return;
+      }
+
+      setVoiceState('processing');
+      void transcribeAudio(audio)
+        .then(async (transcript) => {
+          setDraft(transcript);
+          await send(transcript, {
+            intent: 'capture',
+            voiceAudio: audio,
+            voiceDuration: duration,
+          });
+        })
+        .catch(() => {
+          setErrorByScope((current) => ({
+            ...current,
+            [scopeKey]:
+              'Не удалось расшифровать запись. Проверьте Whisper-сервис и попробуйте ещё раз.',
+          }));
+        })
+        .finally(() => setVoiceState('idle'));
+    };
+
+    try {
+      recorder.start(500);
+      setVoiceState('recording');
+      setRecordingSeconds(0);
+      recordingDurationRef.current = 0;
+      setErrorByScope((current) => ({ ...current, [scopeKey]: null }));
+      const startedAt = Date.now();
+      voiceTimerRef.current = window.setInterval(() => {
+        const seconds = Math.max(
+          1,
+          Math.floor((Date.now() - startedAt) / 1000),
+        );
+        recordingDurationRef.current = seconds;
+        setRecordingSeconds(seconds);
+      }, 250);
+    } catch {
+      mediaRecorderRef.current = null;
+      mediaStreamRef.current = null;
+      stream.getTracks().forEach((track) => track.stop());
+      setVoiceState('idle');
+      setErrorByScope((current) => ({
+        ...current,
+        [scopeKey]: 'Не удалось запустить запись. Попробуйте ещё раз.',
+      }));
+    }
+  }
+
   function finishVoiceRecording() {
-    if (voiceState !== 'recording' || !recognitionRef.current) return;
+    if (voiceState !== 'recording') return;
+    if (mediaRecorderRef.current?.state === 'recording') {
+      setVoiceState('processing');
+      mediaRecorderRef.current.stop();
+      return;
+    }
+    if (!recognitionRef.current) return;
     sendVoiceOnEndRef.current = true;
     setVoiceState('processing');
     recognitionRef.current.stop();
@@ -406,21 +576,54 @@ export function AIChat({
       if (resource) {
         await send(
           `Проанализируй «${resource.title}». Дай краткое резюме, ключевые идеи и следующие шаги.`,
-          resource.id,
+          {
+            context: buildResourceContext(resource),
+            contextCitations: citationsForResources([resource]),
+          },
         );
       }
       return;
     }
 
     const candidates = candidatesFromTransfer(event.dataTransfer);
-    if (!candidates.length || importing) return;
+    await importCandidatesIntoChat(candidates);
+  }
+
+  async function importCandidatesIntoChat(candidates: ImportCandidate[]) {
+    if (!candidates.length || importing || sending) return;
     setImporting(true);
     setErrorByScope((current) => ({ ...current, [scopeKey]: null }));
     try {
       const created = await onImportAndAnalyze(candidates);
-      const firstCreated = created[0];
-      if (!firstCreated) return;
-      await send(buildImportAnalysisPrompt(created), firstCreated.id);
+      if (!created.length) return;
+      const confirmation: AiChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        text:
+          created.length === 1
+            ? `✅ Заметка «${created[0]!.title}» сохранена.`
+            : `✅ Сохранено заметок: ${created.length}.`,
+        citations: created.map((resource) => ({
+          resourceId: resource.id,
+          nodeId: null,
+          kind: resource.kind,
+          title: resource.title,
+          snippet: resource.preview,
+          score: 1,
+        })),
+        proposal: null,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages(scopeKey, (current) => [...current, confirmation]);
+      await send(
+        created.length === 1
+          ? 'Проанализируй сохранённый материал: дай краткое саммари, ключевые идеи и следующие шаги.'
+          : `Проанализируй ${created.length} сохранённых материала: дай общее саммари, ключевые идеи, связи и следующие шаги.`,
+        {
+          context: buildImportAnalysisContext(created),
+          contextCitations: citationsForResources(created),
+        },
+      );
     } catch {
       setErrorByScope((current) => ({
         ...current,
@@ -440,15 +643,29 @@ export function AIChat({
       ...current,
       [currentScopeKey]: null,
     }));
+    let appliedLocally = false;
     try {
-      await onApplyProposal(proposal);
+      const resource = await onApplyProposal(proposal);
+      appliedLocally = true;
+      const capture = voiceCaptureByProposalRef.current.get(proposal.id);
+      if (resource && capture) {
+        await onAttachVoice(
+          resource.id,
+          capture.audio,
+          capture.transcript,
+          capture.duration,
+        );
+      }
       const result = await decideAiProposal(proposal.id, 'applied');
       replaceProposal(currentScopeKey, result.proposal);
+      voiceCaptureByProposalRef.current.delete(proposal.id);
     } catch {
       setErrorByScope((current) => ({
         ...current,
         [currentScopeKey]:
-          'Не удалось применить действие. Ничего дополнительно не изменено.',
+          appliedLocally
+            ? 'Заметка создана, но статус чата не обновился. Повторите действие.'
+            : 'Не удалось применить действие. Попробуйте ещё раз.',
       }));
     } finally {
       setBusyProposalId(null);
@@ -462,6 +679,7 @@ export function AIChat({
     try {
       const result = await decideAiProposal(proposal.id, 'rejected');
       replaceProposal(currentScopeKey, result.proposal);
+      voiceCaptureByProposalRef.current.delete(proposal.id);
     } catch {
       setErrorByScope((current) => ({
         ...current,
@@ -588,13 +806,21 @@ export function AIChat({
                   </button>
                 ))}
                 {message.proposal && (
-                  <ProposalCard
+                  <AiProposalCard
                     proposal={message.proposal}
                     busy={busyProposalId === message.proposal.id}
                     onApply={() => void apply(message.proposal!)}
                     onReject={() => void reject(message.proposal!)}
+                    onOpen={() => {
+                      if (message.proposal?.resourceId) {
+                        onOpenResource(message.proposal.resourceId);
+                      }
+                    }}
                   />
                 )}
+                <time className="ai-message-time" dateTime={message.createdAt}>
+                  {formatMessageTime(message.createdAt)}
+                </time>
               </motion.div>
             ))}
 
@@ -612,12 +838,35 @@ export function AIChat({
             {errorByScope[scopeKey] && (
               <div className="ai-chat-error">{errorByScope[scopeKey]}</div>
             )}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
 
           <div className={`ai-dock-composer is-${voiceState}`}>
+            <input
+              ref={fileInputRef}
+              className="ai-file-input"
+              type="file"
+              multiple
+              tabIndex={-1}
+              onChange={(event) => {
+                const candidates = Array.from(event.target.files ?? []).map(
+                  (file): ImportCandidate => ({ kind: 'file', file }),
+                );
+                event.target.value = '';
+                void importCandidatesIntoChat(candidates);
+              }}
+            />
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files);
+                if (!files.length) return;
+                event.preventDefault();
+                void importCandidatesIntoChat(
+                  files.map((file) => ({ kind: 'file', file })),
+                );
+              }}
               onKeyDown={(event) => {
                 if (
                   voiceState === 'idle' &&
@@ -639,6 +888,17 @@ export function AIChat({
               readOnly={voiceState !== 'idle'}
               disabled={loading || sending}
             />
+            {voiceState === 'idle' && (
+              <button
+                className="attach-button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading || sending || importing}
+                aria-label="Добавить файлы"
+                title="Добавить файлы"
+              >
+                <Paperclip size={15} />
+              </button>
+            )}
             {voiceState !== 'idle' && (
               <div
                 className={`voice-recording-state is-${voiceState}`}
@@ -765,7 +1025,7 @@ function candidatesFromTransfer(dataTransfer: DataTransfer): ImportCandidate[] {
   return candidatesFromText(uriList || dataTransfer.getData('text/plain'));
 }
 
-function buildImportAnalysisPrompt(resources: WorkspaceResource[]): string {
+function buildImportAnalysisContext(resources: WorkspaceResource[]): string {
   const materials = resources
     .map((resource, index) => {
       const imported = resource.imported;
@@ -780,19 +1040,47 @@ function buildImportAnalysisPrompt(resources: WorkspaceResource[]): string {
       return `${index + 1}. ${resource.title}\n${source.slice(0, 12_000)}`;
     })
     .join('\n\n');
-  return `Я добавил в Artifacts новые материалы. Проанализируй их: дай краткое резюме, ключевые идеи, возможные связи и следующие шаги.\n\n${materials}`;
+  return materials.slice(0, 60_000);
 }
 
-function ProposalCard({
+function buildResourceContext(resource: WorkspaceResource): string {
+  return buildImportAnalysisContext([resource]);
+}
+
+function citationsForResources(
+  resources: WorkspaceResource[],
+): AiChatMessage['citations'] {
+  return resources.map((resource) => ({
+    resourceId: resource.id,
+    nodeId: null,
+    kind: resource.kind,
+    title: resource.title,
+    snippet: resource.preview,
+    score: 1,
+  }));
+}
+
+function formatMessageTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+export function AiProposalCard({
   proposal,
   busy,
   onApply,
   onReject,
+  onOpen,
 }: {
   proposal: AiProposal;
   busy: boolean;
   onApply: () => void;
   onReject: () => void;
+  onOpen: () => void;
 }) {
   return (
     <div className="proposal-card">
@@ -818,14 +1106,14 @@ function ProposalCard({
             {busy ? <LoaderCircle className="spin" size={13} /> : 'Применить'}
           </button>
         </div>
+      ) : proposal.status === 'applied' && proposal.resourceId ? (
+        <button className="proposal-open" onClick={onOpen}>
+          <FileText size={13} />
+          Открыть
+        </button>
       ) : (
         <span className={`proposal-status ${proposal.status}`}>
-          {proposal.status === 'applied' && <Check size={14} />}
-          {proposal.status === 'applied'
-            ? 'Готово'
-            : proposal.status === 'rejected'
-              ? 'Отклонено'
-              : 'Истекло'}
+          {proposal.status === 'rejected' ? 'Отклонено' : 'Истекло'}
         </span>
       )}
     </div>

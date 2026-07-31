@@ -3,6 +3,7 @@ import {
   aiChatResponseSchema,
   aiProposalDecisionResultSchema,
   aiThreadHistorySchema,
+  aiTranscriptionResultSchema,
   createResourceSchema,
   createFolderSchema,
   folderSummarySchema,
@@ -367,11 +368,17 @@ export async function askAi(
   message: string,
   resourceId?: string,
   threadId?: string,
+  context?: string,
+  intent: 'chat' | 'capture' = 'chat',
+  contextCitations?: SearchResult[],
 ): Promise<AiChatResponse> {
   const body = aiChatRequestSchema.parse({
     message,
     ...(resourceId ? { resourceId } : {}),
     ...(threadId ? { threadId } : {}),
+    ...(context?.trim() ? { context } : {}),
+    ...(contextCitations?.length ? { contextCitations } : {}),
+    ...(intent !== 'chat' ? { intent } : {}),
   });
   return aiChatResponseSchema.parse(
     await request('/ai/chat', {
@@ -408,22 +415,36 @@ export async function decideAiProposal(
   );
 }
 
+export async function transcribeAudio(audio: Blob): Promise<string> {
+  const headers = new Headers();
+  await appendAuthHeader(headers);
+  const form = new FormData();
+  const extension = audio.type.includes('ogg')
+    ? 'ogg'
+    : audio.type.includes('mp4')
+      ? 'm4a'
+      : 'webm';
+  form.append('audio', audio, `fixnote-recording.${extension}`);
+  const language = navigator.language?.split('-')[0] || 'ru';
+  const response = await fetch(
+    `${apiUrl}/ai/transcribe?language=${encodeURIComponent(language)}`,
+    {
+      method: 'POST',
+      headers,
+      body: form,
+      signal: AbortSignal.timeout(125_000),
+    },
+  );
+  if (!response.ok) throw new Error(`API ${response.status}`);
+  return aiTranscriptionResultSchema.parse(await response.json()).text;
+}
+
 async function request(path: string, init?: RequestInit): Promise<unknown> {
   const headers = new Headers(init?.headers);
   headers.set('content-type', 'application/json');
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 1_500);
-
-  if (isMockAuth || !supabaseClient) {
-    headers.set(
-      'x-fixnote-user',
-      import.meta.env.VITE_MOCK_USER_ID ??
-        '00000000-0000-4000-8000-000000000001',
-    );
-  } else {
-    const token = await getRealtimeToken();
-    if (token) headers.set('authorization', `Bearer ${token}`);
-  }
+  await appendAuthHeader(headers);
 
   try {
     const response = await fetch(`${apiUrl}${path}`, {
@@ -436,6 +457,19 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+async function appendAuthHeader(headers: Headers): Promise<void> {
+  if (isMockAuth || !supabaseClient) {
+    headers.set(
+      'x-fixnote-user',
+      import.meta.env.VITE_MOCK_USER_ID ??
+        '00000000-0000-4000-8000-000000000001',
+    );
+    return;
+  }
+  const token = await getRealtimeToken();
+  if (token) headers.set('authorization', `Bearer ${token}`);
 }
 
 export const isMockAuth = import.meta.env.VITE_AUTH_MODE === 'mock';

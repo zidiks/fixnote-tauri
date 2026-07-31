@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,7 +8,10 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   aiChatRequestSchema,
   aiProposalDecisionSchema,
@@ -23,6 +27,14 @@ import type { AuthenticatedUser } from '../auth/auth.types.js';
 import { AiService } from './ai.service.js';
 
 const uuidSchema = z.string().uuid();
+const languageSchema = z.string().trim().min(2).max(12).optional();
+
+interface UploadedAudio {
+  buffer: Buffer;
+  originalname: string;
+  mimetype: string;
+  size: number;
+}
 
 @Controller('ai')
 export class AiController {
@@ -44,6 +56,32 @@ export class AiController {
     return this.ai.history(
       user,
       resourceId ? uuidSchema.parse(resourceId) : undefined,
+    );
+  }
+
+  @Post('transcribe')
+  @UseInterceptors(FileInterceptor('audio', {
+    limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  }))
+  transcribe(
+    @CurrentUser() user: AuthenticatedUser,
+    @UploadedFile() file: UploadedAudio | undefined,
+    @Query('language') language?: string,
+  ): Promise<{ text: string }> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Audio file is required');
+    }
+    if (
+      file.mimetype &&
+      !file.mimetype.startsWith('audio/') &&
+      file.mimetype !== 'video/webm'
+    ) {
+      throw new BadRequestException('Unsupported audio format');
+    }
+    return this.ai.transcribe(
+      user,
+      file,
+      languageSchema.parse(language),
     );
   }
 
